@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+*.so
+venv/
+.venv/
+env/
+
+# ML artifacts
+models/*.joblib
+models/*.pkl
+*.h5
+*.onnx
+
+# Data
+*.db
+*.duckdb
+*.duckdb.wal
+data/raw/
+data/processed/
+
+# Environment
+.env
+.env.local
+.env.production
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Node
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude
+.claude/
+
+# Logs
+*.log
+logs/
+
+# Jupyter
+.ipynb_checkpoints/
