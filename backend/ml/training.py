@@ -50,9 +50,9 @@ def generate_bars(trades: pd.DataFrame, symbol: str, bar_type: str,
         }
         generator = bar_class(symbol, thresholds[bar_type])
     else:
-        # Imbalance/run bars
+        # Imbalance/run bars — concrete classes hardcode bar_type internally
         generator = bar_class(
-            symbol, bar_type,
+            symbol,
             expected_num_ticks_init=bar_config.tick_count,
             num_prev_bars=bar_config.ewma_span,
         )
@@ -86,8 +86,16 @@ def train_pipeline(
     bar_config: BarConfig | None = None,
     barrier_config: TripleBarrierConfig | None = None,
     training_config: TrainingConfig | None = None,
+    trades: pd.DataFrame | None = None,
 ) -> dict:
     """Full training pipeline: data → model artifacts.
+
+    Parameters
+    ----------
+    trades : pd.DataFrame | None
+        Pre-loaded trade data. When provided, skips CSV loading (useful
+        for batch training where the same data is reused across multiple
+        bar_type/labeling combinations).
 
     Returns dict with paths to saved artifacts and training metrics.
     """
@@ -95,11 +103,12 @@ def train_pipeline(
     barrier_config = barrier_config or TripleBarrierConfig()
     training_config = training_config or TrainingConfig()
 
-    logger.info(f"Loading trades for {symbol} from {data_dir}")
-    trades = read_trades_for_symbol(symbol, data_dir)
+    if trades is None:
+        logger.info(f"Loading trades for {symbol} from {data_dir}")
+        trades = read_trades_for_symbol(symbol, data_dir)
     if trades.empty:
         raise ValueError(f"No trade data found for {symbol} in {data_dir}")
-    logger.info(f"Loaded {len(trades):,} trades")
+    logger.info(f"Using {len(trades):,} trades")
 
     # Step 1: Generate bars
     logger.info(f"Generating {bar_type} bars...")
@@ -123,10 +132,14 @@ def train_pipeline(
     logger.info("Computing features...")
     features = compute_all_features(bars, window=training_config.feature_window)
 
-    # Align features with labeled bars (drop warm-up NaN rows)
+    # Align features with labeled bars — drop warm-up NaN rows
+    # Forward-fill then drop any remaining leading NaN rows
+    features = features.ffill()
     valid_mask = features.notna().all(axis=1)
     features = features[valid_mask]
     bars = bars.loc[features.index]
+    if len(features) == 0:
+        raise ValueError("No valid samples after feature warm-up (all rows have NaN)")
     labels = bars["label"].values.astype(int)
     logger.info(f"Samples after feature warm-up: {len(features):,}, "
                 f"Features: {features.shape[1]}")
@@ -139,7 +152,6 @@ def train_pipeline(
         for i in range(len(bars))
     ]
     returns = bars["close"].pct_change().fillna(0).values
-    returns = returns[valid_mask]
     timestamps = bars["timestamp"].values
 
     weights = compute_sample_weights(

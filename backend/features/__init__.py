@@ -125,13 +125,15 @@ def compute_all_features(
             lz_vals.append(np.nan)
     price_df["rolling_lempel_ziv"] = lz_vals
 
-    # Rolling Kontoyiannis entropy of returns (takes pd.Series, discretizes internally)
+    # Rolling Kontoyiannis entropy of returns (uses larger lookback window)
+    kont_window = window * 3  # Need more data than match window for meaningful estimate
     kont_vals = []
     for i in range(len(returns)):
-        start = max(0, i - window + 1)
+        start = max(0, i - kont_window + 1)
         chunk = returns.iloc[start : i + 1].dropna()
-        if len(chunk) >= window + 2:
-            kont_vals.append(kontoyiannis_entropy(chunk, window=min(len(chunk) // 2, window)))
+        match_len = min(len(chunk) // 3, window)
+        if len(chunk) >= 10 and match_len >= 3:
+            kont_vals.append(kontoyiannis_entropy(chunk, window=match_len))
         else:
             kont_vals.append(np.nan)
     price_df["rolling_kontoyiannis_entropy"] = kont_vals
