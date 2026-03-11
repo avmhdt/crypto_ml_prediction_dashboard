@@ -17,6 +17,8 @@ from backend.features.price_features import (
     cusum_filter,
     shannon_entropy,
     plugin_entropy,
+    lempel_ziv_complexity,
+    kontoyiannis_entropy,
 )
 from backend.features.microstructural_features import (
     order_book_imbalance,
@@ -110,6 +112,29 @@ def compute_all_features(
         else:
             pent_vals.append(np.nan)
     price_df["rolling_plugin_entropy"] = pent_vals
+
+    # Rolling Lempel-Ziv complexity of returns (binary: up/down)
+    lz_vals = []
+    for i in range(len(returns)):
+        start = max(0, i - window + 1)
+        chunk = returns.iloc[start : i + 1].dropna()
+        if len(chunk) >= 5:
+            binary = (chunk > 0).astype(int).values
+            lz_vals.append(lempel_ziv_complexity(binary))
+        else:
+            lz_vals.append(np.nan)
+    price_df["rolling_lempel_ziv"] = lz_vals
+
+    # Rolling Kontoyiannis entropy of returns (takes pd.Series, discretizes internally)
+    kont_vals = []
+    for i in range(len(returns)):
+        start = max(0, i - window + 1)
+        chunk = returns.iloc[start : i + 1].dropna()
+        if len(chunk) >= window + 2:
+            kont_vals.append(kontoyiannis_entropy(chunk, window=min(len(chunk) // 2, window)))
+        else:
+            kont_vals.append(np.nan)
+    price_df["rolling_kontoyiannis_entropy"] = kont_vals
 
     frames.append(price_df)
 

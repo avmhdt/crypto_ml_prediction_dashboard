@@ -27,10 +27,10 @@ def compute_time_features(timestamps: pd.Series) -> pd.DataFrame:
     """
     dt = pd.to_datetime(timestamps, unit="ms", utc=True)
 
-    hour = dt.hour + dt.minute / 60.0 + dt.second / 3600.0
-    dow = dt.dayofweek.astype(np.float64)
-    dom = dt.day.astype(np.float64)
-    month = dt.month.astype(np.float64)
+    hour = dt.dt.hour + dt.dt.minute / 60.0 + dt.dt.second / 3600.0
+    dow = dt.dt.dayofweek.astype(np.float64)
+    dom = dt.dt.day.astype(np.float64)
+    month = dt.dt.month.astype(np.float64)
 
     result = pd.DataFrame(index=timestamps.index)
     result["hour_sin"] = np.sin(2 * np.pi * hour / 24.0)

@@ -74,19 +74,20 @@ class LivePipeline:
 
     def load_models(self) -> None:
         """Load trained models from disk if available."""
-        models_dir = MODELS_DIR / self.symbol.lower()
+        models_dir = MODELS_DIR
         if not models_dir.exists():
-            logger.info(f"No models directory for {self.symbol}, inference disabled")
+            logger.info(f"No models directory found, inference disabled")
             return
 
         loaded = 0
         for bar_type in BAR_TYPES:
             for labeling in LABELING_METHODS:
                 key = (bar_type, labeling)
-                primary_path = models_dir / f"primary_{bar_type}_{labeling}.pkl"
-                scaler_path = models_dir / f"scaler_{bar_type}_{labeling}.pkl"
-                features_path = models_dir / f"features_{bar_type}_{labeling}.json"
-                meta_path = models_dir / f"meta_{bar_type}_{labeling}.pkl"
+                prefix = f"{self.symbol}_{bar_type}_{labeling}"
+                primary_path = models_dir / f"{prefix}_primary.joblib"
+                scaler_path = models_dir / f"{prefix}_scaler.joblib"
+                features_path = models_dir / f"{prefix}_features.json"
+                meta_path = models_dir / f"{prefix}_secondary.joblib"
 
                 if primary_path.exists() and scaler_path.exists() and features_path.exists():
                     try:
