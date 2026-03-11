@@ -45,6 +45,7 @@ frontend/build/
 # OS
 .DS_Store
 Thumbs.db
+*.stackdump
 
 # Claude
 .claude/
