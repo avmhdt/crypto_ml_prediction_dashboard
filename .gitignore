@@ -55,3 +55,6 @@ logs/
 
 # Jupyter
 .ipynb_checkpoints/
+
+# SDD
+.sdd/
