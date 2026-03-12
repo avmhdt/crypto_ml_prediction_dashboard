@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import {
   createChart,
   CandlestickSeries,
@@ -14,6 +14,7 @@ import {
   type CandlestickData,
   type SeriesMarker,
   type Time,
+  type Logical,
   ColorType,
 } from "lightweight-charts";
 import type { BarData, Signal } from "@/lib/types";
@@ -36,6 +37,32 @@ export function Chart({ bars, signals, labeling }: ChartProps) {
   const verticalBarrierRef = useRef<HTMLDivElement | null>(null);
   const rangeHandlerRef = useRef<(() => void) | null>(null);
   const [selectedSignal, setSelectedSignal] = useState<Signal | null>(null);
+
+  // Sort bars once, share everywhere
+  const sortedBars = useMemo(
+    () => [...bars].sort((a, b) => a.timestamp - b.timestamp),
+    [bars]
+  );
+
+  // Store bar metadata in ref so drawBarriers/updateVerticalPos read fresh values
+  // without needing `bars` in their dependency arrays
+  const barMetaRef = useRef({
+    count: 0,
+    firstTimeSec: 0,
+    avgIntervalSec: 60,
+  });
+  useMemo(() => {
+    const n = sortedBars.length;
+    barMetaRef.current = {
+      count: n,
+      firstTimeSec: n > 0 ? sortedBars[0].timestamp / 1000 : 0,
+      avgIntervalSec:
+        n > 1
+          ? (sortedBars[n - 1].timestamp - sortedBars[0].timestamp) /
+            (1000 * (n - 1))
+          : 60,
+    };
+  }, [sortedBars]);
 
   // Clear barrier price lines and vertical time barrier
   const clearBarriers = useCallback(() => {
@@ -109,19 +136,29 @@ export function Chart({ bars, signals, labeling }: ChartProps) {
 
     // Draw vertical time barrier
     if (signal.time_barrier != null && chartRef.current) {
-      const tbTime = (signal.time_barrier / 1000) as Time;
+      const tbTimeSec = signal.time_barrier / 1000;
       const chart = chartRef.current;
 
       const updateVerticalPos = () => {
-        const coord = chart.timeScale().timeToCoordinate(tbTime);
-        if (
-          coord !== null &&
-          coord !== undefined &&
-          verticalBarrierRef.current
-        ) {
+        if (!verticalBarrierRef.current) return;
+
+        // Try direct coordinate first (works when time_barrier is within data range)
+        let coord = chart.timeScale().timeToCoordinate(tbTimeSec as Time);
+
+        // If null, extrapolate using logical coordinates
+        if (coord === null || coord === undefined) {
+          const meta = barMetaRef.current;
+          // Compute logical index from first bar — works for any timestamp
+          // whether within or beyond the data range
+          const tbLogical =
+            (tbTimeSec - meta.firstTimeSec) / meta.avgIntervalSec;
+          coord = chart.timeScale().logicalToCoordinate(tbLogical as Logical);
+        }
+
+        if (coord !== null && coord !== undefined) {
           verticalBarrierRef.current.style.left = `${coord}px`;
           verticalBarrierRef.current.style.display = "block";
-        } else if (verticalBarrierRef.current) {
+        } else {
           verticalBarrierRef.current.style.display = "none";
         }
       };
@@ -227,10 +264,8 @@ export function Chart({ bars, signals, labeling }: ChartProps) {
 
   // Update candlestick and volume data
   useEffect(() => {
-    if (!candlestickRef.current || !volumeRef.current || bars.length === 0)
+    if (!candlestickRef.current || !volumeRef.current || sortedBars.length === 0)
       return;
-
-    const sortedBars = [...bars].sort((a, b) => a.timestamp - b.timestamp);
 
     const candleData: CandlestickData<Time>[] = sortedBars.map((bar) => ({
       time: (bar.timestamp / 1000) as Time,
@@ -248,13 +283,12 @@ export function Chart({ bars, signals, labeling }: ChartProps) {
 
     candlestickRef.current.setData(candleData);
     volumeRef.current.setData(volumeData);
-  }, [bars]);
+  }, [sortedBars]);
 
   // Update signal markers
   useEffect(() => {
-    if (!markersPluginRef.current || bars.length === 0) return;
+    if (!markersPluginRef.current || sortedBars.length === 0) return;
 
-    const sortedBars = [...bars].sort((a, b) => a.timestamp - b.timestamp);
     const firstTimestamp = sortedBars[0]?.timestamp ?? 0;
 
     const markers: SeriesMarker<Time>[] = signals
@@ -275,7 +309,7 @@ export function Chart({ bars, signals, labeling }: ChartProps) {
       }));
 
     markersPluginRef.current.setMarkers(markers);
-  }, [bars, signals]);
+  }, [sortedBars, signals]);
 
   // Handle click for barrier visualization (triple_barrier only)
   useEffect(() => {
