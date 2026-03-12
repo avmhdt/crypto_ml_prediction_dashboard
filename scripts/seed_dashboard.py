@@ -116,39 +116,42 @@ def main():
                 pass
         print(f"  Inserted {inserted:,} bars into DB")
 
-        # Try to generate signals using trained models if available
-        _try_seed_signals(
+        # Try ML model signals first, fall back to synthetic
+        ml_ok = _try_seed_signals(
             conn, bars_df, args.symbol, bar_type,
             barrier_config, bar_config,
         )
+        if not ml_ok:
+            _seed_synthetic_signals(conn, bars_df, args.symbol, bar_type)
 
+    # Force WAL flush so data survives force-kills
+    conn.execute("CHECKPOINT")
     conn.close()
     print(f"\nDone! Dashboard DB seeded at {DB_PATH}")
     print("Restart the backend server to pick up the new data.")
 
 
 def _try_seed_signals(conn, bars_df, symbol, bar_type, barrier_config, bar_config):
-    """Try to generate signals from trained models and insert into DB."""
+    """Try to generate signals from trained models. Returns True if any succeeded."""
     from backend.config import MODELS_DIR, LABELING_METHODS
 
+    any_succeeded = False
     for labeling in LABELING_METHODS:
         prefix = f"{symbol}_{bar_type}_{labeling}"
         primary_path = MODELS_DIR / f"{prefix}_primary.joblib"
-        secondary_path = MODELS_DIR / f"{prefix}_secondary.joblib"
         scaler_path = MODELS_DIR / f"{prefix}_scaler.joblib"
         features_path = MODELS_DIR / f"{prefix}_features.json"
+        secondary_path = MODELS_DIR / f"{prefix}_secondary.joblib"
 
         if not primary_path.exists():
             continue
 
-        print(f"  Generating {labeling} signals from trained model...")
         try:
             from backend.ml.primary_model import PrimaryModel
             from backend.ml.meta_labeling import MetaLabelingModel
             from backend.ml.bet_sizing import compute_bet_sizes
             from backend.features import compute_all_features
 
-            # Compute features
             features = compute_all_features(bars_df, window=20)
             features = features.ffill()
             valid = features.notna().all(axis=1)
@@ -158,54 +161,87 @@ def _try_seed_signals(conn, bars_df, symbol, bar_type, barrier_config, bar_confi
             if len(features) < 10:
                 continue
 
-            # Load and run primary model
             primary = PrimaryModel()
             primary.load(primary_path, scaler_path, features_path)
             preds = primary.predict(features)
 
-            # Load and run meta model
             meta = MetaLabelingModel()
             meta.load(secondary_path)
             meta_probs = meta.predict_proba(features, preds)
             bet_sizes = compute_bet_sizes(meta_probs)
 
-            # Generate signals for predictions with sufficient confidence
             signal_count = 0
             for i in range(len(preds)):
                 if bet_sizes[i] < 0.25:
-                    continue  # Skip low-confidence predictions
-
+                    continue
                 row = valid_bars.iloc[i]
                 price = float(row["close"])
-                vol = float(row["high"] - row["low"])  # Simple volatility proxy
+                vol = float(row["high"] - row["low"])
                 side = int(preds[i])
-
                 sl_price = price - side * vol * barrier_config.sl_multiplier
                 pt_price = price + side * vol * barrier_config.pt_multiplier
-
                 try:
                     conn.execute(
                         """INSERT INTO signals (symbol, bar_type, labeling_method,
                            timestamp, side, size, entry_price, sl_price, pt_price,
                            time_barrier, meta_probability)
                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                        [
-                            symbol, bar_type, labeling,
-                            int(row["timestamp"]), side,
-                            float(bet_sizes[i]), price,
-                            sl_price, pt_price,
-                            int(row["timestamp"]) + barrier_config.max_holding_period * 60000,
-                            float(meta_probs[i]),
-                        ],
+                        [symbol, bar_type, labeling, int(row["timestamp"]), side,
+                         float(bet_sizes[i]), price, sl_price, pt_price,
+                         int(row["timestamp"]) + barrier_config.max_holding_period * 60000,
+                         float(meta_probs[i])],
                     )
                     signal_count += 1
                 except Exception:
                     pass
-
-            print(f"    {labeling}: {signal_count} signals")
+            if signal_count > 0:
+                any_succeeded = True
+            print(f"    {labeling}: {signal_count} signals (ML)")
 
         except Exception as e:
-            print(f"    {labeling}: failed - {e}")
+            print(f"    {labeling}: ML failed - {e}")
+
+    return any_succeeded
+
+
+def _seed_synthetic_signals(conn, bars_df, symbol, bar_type):
+    """Generate synthetic signals for dashboard display when ML models fail."""
+    from backend.config import LABELING_METHODS
+
+    np.random.seed(42 + hash(bar_type) % 1000)
+    total = 0
+
+    for _, row in bars_df.iterrows():
+        if np.random.random() > 0.12:
+            continue
+        side = int(np.random.choice([-1, 1]))
+        vol = float(row["high"] - row["low"])
+        if vol <= 0:
+            continue
+        meta_prob = round(float(np.random.uniform(0.45, 0.95)), 4)
+        size = float(np.random.choice([0.25, 0.5, 0.75, 1.0],
+                                       p=[0.15, 0.3, 0.35, 0.2]))
+        price = float(row["close"])
+        sl = price - side * vol * 2.0
+        pt = price + side * vol * 2.0
+        tb = int(row["timestamp"]) + 50 * 60000
+
+        for labeling in LABELING_METHODS:
+            try:
+                conn.execute(
+                    """INSERT INTO signals (symbol, bar_type, labeling_method,
+                       timestamp, side, size, entry_price, sl_price, pt_price,
+                       time_barrier, meta_probability)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    [symbol, bar_type, labeling, int(row["timestamp"]),
+                     side, size, price, sl, pt, tb, meta_prob],
+                )
+                total += 1
+            except Exception:
+                pass
+
+    per_labeling = total // len(LABELING_METHODS) if LABELING_METHODS else 0
+    print(f"  Synthetic signals: {per_labeling} per labeling method ({total} total)")
 
 
 if __name__ == "__main__":
