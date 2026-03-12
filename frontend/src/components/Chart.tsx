@@ -110,9 +110,10 @@ export function Chart({ bars, signals, labeling }: ChartProps) {
     // Draw vertical time barrier
     if (signal.time_barrier != null && chartRef.current) {
       const tbTime = (signal.time_barrier / 1000) as Time;
+      const chart = chartRef.current;
 
       const updateVerticalPos = () => {
-        const coord = chartRef.current?.timeScale().timeToCoordinate(tbTime);
+        const coord = chart.timeScale().timeToCoordinate(tbTime);
         if (
           coord !== null &&
           coord !== undefined &&
@@ -125,8 +126,11 @@ export function Chart({ bars, signals, labeling }: ChartProps) {
         }
       };
 
-      updateVerticalPos();
-      chartRef.current
+      // Defer to ensure chart layout is complete
+      requestAnimationFrame(() => {
+        requestAnimationFrame(updateVerticalPos);
+      });
+      chart
         .timeScale()
         .subscribeVisibleLogicalRangeChange(updateVerticalPos);
       rangeHandlerRef.current = updateVerticalPos;
@@ -171,6 +175,7 @@ export function Chart({ bars, signals, labeling }: ChartProps) {
         borderColor: "#1e1e2a",
         timeVisible: true,
         secondsVisible: false,
+        rightOffset: 60,
       },
       width: containerRef.current.clientWidth,
       height: 520,
