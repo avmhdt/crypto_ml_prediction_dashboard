@@ -135,6 +135,8 @@ async def seed_signals(request: Request, symbol: str, bar_type: str = "time"):
         if vol <= 0:
             continue
         meta_prob = round(float(np.random.uniform(0.45, 0.95)), 4)
+        if meta_prob < 0.5:
+            continue
         size = float(np.random.choice([0.25, 0.5, 0.75, 1.0], p=[0.15, 0.3, 0.35, 0.2]))
         sl = float(row["close"]) - side * vol * 2.0
         pt = float(row["close"]) + side * vol * 2.0

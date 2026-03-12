@@ -195,6 +195,10 @@ class LivePipeline:
                 else:
                     meta_proba = primary_proba
 
+                # Skip if meta model says primary is more likely wrong
+                if meta_proba < 0.5:
+                    continue
+
                 # Bet sizing
                 bet_size = float(
                     compute_bet_sizes(np.array([meta_proba]))[0]
