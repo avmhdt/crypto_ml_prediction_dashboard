@@ -77,11 +77,14 @@ class _RunBarBase(EWMABarGenerator):
     # ------------------------------------------------------------------
     def _update_ewma_runs(self, norm_run_up: float, norm_run_down: float,
                           p_buy_bar: float) -> None:
-        """Update EWMA estimates after a bar completes."""
+        """Update EWMA estimates after a bar completes, with clamping."""
         a = self._ewma_alpha
-        self._expected_run_up = a * norm_run_up + (1 - a) * self._expected_run_up
-        self._expected_run_down = a * norm_run_down + (1 - a) * self._expected_run_down
-        self._p_buy = a * p_buy_bar + (1 - a) * self._p_buy
+        self._expected_run_up = max(0.01, min(10.0,
+            a * norm_run_up + (1 - a) * self._expected_run_up))
+        self._expected_run_down = max(0.01, min(10.0,
+            a * norm_run_down + (1 - a) * self._expected_run_down))
+        self._p_buy = max(0.01, min(0.99,
+            a * p_buy_bar + (1 - a) * self._p_buy))
 
     def _threshold(self) -> float:
         """RHS of the emission condition (adaptive threshold)."""

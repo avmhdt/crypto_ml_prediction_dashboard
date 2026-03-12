@@ -77,11 +77,12 @@ class _ImbalanceBarBase(EWMABarGenerator):
     # EWMA helpers for imbalance estimation
     # ------------------------------------------------------------------
     def _update_expected_imbalance(self, abs_norm_imbalance: float) -> None:
-        """Update the EWMA of |imbalance|/T."""
-        self._expected_imbalance = (
+        """Update the EWMA of |imbalance|/T, clamped to [0.1, 10.0]."""
+        raw = (
             self._ewma_alpha * abs_norm_imbalance +
             (1 - self._ewma_alpha) * self._expected_imbalance
         )
+        self._expected_imbalance = max(0.1, min(10.0, raw))
 
     def _threshold(self) -> float:
         """Current adaptive threshold."""
