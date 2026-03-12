@@ -96,12 +96,25 @@ class MetaLabelingModel:
         proba = self.predict_proba(X, primary_predictions)
         return (proba >= threshold).astype(int)
 
-    def save(self, path: Path) -> None:
-        """Save meta-labeling model."""
+    def save(self, path: Path, features_path: Path | None = None) -> None:
+        """Save meta-labeling model and feature names."""
         path.parent.mkdir(parents=True, exist_ok=True)
         joblib.dump(self.model, path)
+        if features_path is None:
+            features_path = path.with_name(
+                path.stem.replace("_secondary", "_meta_features") + ".json"
+            )
+        import json
+        features_path.write_text(json.dumps(self.feature_names))
 
-    def load(self, path: Path) -> "MetaLabelingModel":
-        """Load meta-labeling model."""
+    def load(self, path: Path, features_path: Path | None = None) -> "MetaLabelingModel":
+        """Load meta-labeling model and feature names."""
         self.model = joblib.load(path)
+        if features_path is None:
+            features_path = path.with_name(
+                path.stem.replace("_secondary", "_meta_features") + ".json"
+            )
+        if features_path.exists():
+            import json
+            self.feature_names = json.loads(features_path.read_text())
         return self
