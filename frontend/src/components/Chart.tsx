@@ -1,13 +1,18 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import {
   createChart,
   CandlestickSeries,
   HistogramSeries,
+  createSeriesMarkers,
+  LineStyle,
   type IChartApi,
   type ISeriesApi,
+  type ISeriesMarkersPluginApi,
+  type IPriceLine,
   type CandlestickData,
+  type SeriesMarker,
   type Time,
   ColorType,
 } from "lightweight-charts";
@@ -16,15 +21,81 @@ import type { BarData, Signal } from "@/lib/types";
 interface ChartProps {
   bars: BarData[];
   signals: Signal[];
+  labeling: string;
 }
 
-export function Chart({ bars, signals }: ChartProps) {
+export function Chart({ bars, signals, labeling }: ChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const candlestickRef = useRef<ISeriesApi<any> | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const volumeRef = useRef<ISeriesApi<any> | null>(null);
+  const markersPluginRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
+  const barrierLinesRef = useRef<IPriceLine[]>([]);
+  const [selectedSignal, setSelectedSignal] = useState<Signal | null>(null);
+
+  // Clear barrier price lines
+  const clearBarriers = useCallback(() => {
+    if (candlestickRef.current) {
+      for (const line of barrierLinesRef.current) {
+        candlestickRef.current.removePriceLine(line);
+      }
+    }
+    barrierLinesRef.current = [];
+    setSelectedSignal(null);
+  }, []);
+
+  // Draw barrier price lines for a triple_barrier signal
+  const drawBarriers = useCallback((signal: Signal) => {
+    if (!candlestickRef.current) return;
+
+    clearBarriers();
+    setSelectedSignal(signal);
+
+    const lines: IPriceLine[] = [];
+
+    if (signal.sl_price != null) {
+      lines.push(
+        candlestickRef.current.createPriceLine({
+          price: signal.sl_price,
+          color: "#ef4444",
+          lineWidth: 1,
+          lineStyle: LineStyle.Dashed,
+          axisLabelVisible: true,
+          title: `SL ${signal.sl_price.toFixed(2)}`,
+        })
+      );
+    }
+
+    if (signal.pt_price != null) {
+      lines.push(
+        candlestickRef.current.createPriceLine({
+          price: signal.pt_price,
+          color: "#22c55e",
+          lineWidth: 1,
+          lineStyle: LineStyle.Dashed,
+          axisLabelVisible: true,
+          title: `TP ${signal.pt_price.toFixed(2)}`,
+        })
+      );
+    }
+
+    if (signal.entry_price != null) {
+      lines.push(
+        candlestickRef.current.createPriceLine({
+          price: signal.entry_price,
+          color: "#3b82f6",
+          lineWidth: 1,
+          lineStyle: LineStyle.Dotted,
+          axisLabelVisible: true,
+          title: `Entry ${signal.entry_price.toFixed(2)}`,
+        })
+      );
+    }
+
+    barrierLinesRef.current = lines;
+  }, [clearBarriers]);
 
   // Initialize chart
   useEffect(() => {
@@ -86,6 +157,10 @@ export function Chart({ bars, signals }: ChartProps) {
       scaleMargins: { top: 0.8, bottom: 0 },
     });
 
+    // Create markers plugin (v5 API)
+    const markersPlugin = createSeriesMarkers(candlestickSeries, []);
+    markersPluginRef.current = markersPlugin;
+
     chartRef.current = chart;
     candlestickRef.current = candlestickSeries;
     volumeRef.current = volumeSeries;
@@ -99,10 +174,13 @@ export function Chart({ bars, signals }: ChartProps) {
 
     return () => {
       resizeObserver.disconnect();
+      markersPlugin.detach();
       chart.remove();
       chartRef.current = null;
       candlestickRef.current = null;
       volumeRef.current = null;
+      markersPluginRef.current = null;
+      barrierLinesRef.current = [];
     };
   }, []);
 
@@ -129,10 +207,17 @@ export function Chart({ bars, signals }: ChartProps) {
 
     candlestickRef.current.setData(candleData);
     volumeRef.current.setData(volumeData);
+  }, [bars]);
 
-    // Add signal markers
-    const markers = signals
-      .filter((s) => s.timestamp >= sortedBars[0]?.timestamp)
+  // Update signal markers
+  useEffect(() => {
+    if (!markersPluginRef.current || bars.length === 0) return;
+
+    const sortedBars = [...bars].sort((a, b) => a.timestamp - b.timestamp);
+    const firstTimestamp = sortedBars[0]?.timestamp ?? 0;
+
+    const markers: SeriesMarker<Time>[] = signals
+      .filter((s) => s.timestamp >= firstTimestamp)
       .sort((a, b) => a.timestamp - b.timestamp)
       .map((signal) => ({
         time: (signal.timestamp / 1000) as Time,
@@ -145,15 +230,61 @@ export function Chart({ bars, signals }: ChartProps) {
           signal.side === 1
             ? ("arrowUp" as const)
             : ("arrowDown" as const),
-        text: `${signal.side === 1 ? "L" : "S"} ${signal.size.toFixed(2)}`,
+        text: `${signal.side === 1 ? "LONG" : "SHORT"} ${signal.size.toFixed(2)}`,
       }));
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    if (typeof (candlestickRef.current as any).setMarkers === "function") {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (candlestickRef.current as any).setMarkers(markers);
-    }
+    markersPluginRef.current.setMarkers(markers);
   }, [bars, signals]);
+
+  // Handle click for barrier visualization (triple_barrier only)
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+
+    const handleClick = (param: { time?: Time }) => {
+      if (!param.time) {
+        clearBarriers();
+        return;
+      }
+
+      // Only show barriers for triple_barrier labeling
+      if (labeling !== "triple_barrier") {
+        clearBarriers();
+        return;
+      }
+
+      const clickedTime = (param.time as number) * 1000;
+
+      // Find the closest signal within a tolerance window
+      const tolerance = 60 * 60 * 1000; // 1 hour tolerance
+      let closest: Signal | null = null;
+      let closestDist = Infinity;
+
+      for (const signal of signals) {
+        const dist = Math.abs(signal.timestamp - clickedTime);
+        if (dist < tolerance && dist < closestDist) {
+          closest = signal;
+          closestDist = dist;
+        }
+      }
+
+      if (closest && (closest.sl_price != null || closest.pt_price != null)) {
+        drawBarriers(closest);
+      } else {
+        clearBarriers();
+      }
+    };
+
+    chart.subscribeClick(handleClick);
+    return () => {
+      chart.unsubscribeClick(handleClick);
+    };
+  }, [signals, labeling, clearBarriers, drawBarriers]);
+
+  // Clear barriers when labeling method changes
+  useEffect(() => {
+    clearBarriers();
+  }, [labeling, clearBarriers]);
 
   const barCount = bars.length;
   const lastPrice = bars.length > 0 ? bars[bars.length - 1]?.close : null;
@@ -189,9 +320,26 @@ export function Chart({ bars, signals }: ChartProps) {
             </span>
           )}
         </div>
-        <span className="text-[10px] text-zinc-600">
-          {barCount > 0 ? `${barCount} bars` : "No data"}
-        </span>
+        <div className="flex items-center gap-3">
+          {selectedSignal && (
+            <button
+              onClick={clearBarriers}
+              className="flex items-center gap-1.5 rounded border border-blue-500/30 bg-blue-500/10 px-2 py-0.5 text-[10px] font-medium text-blue-400 transition-colors hover:bg-blue-500/20"
+            >
+              <span>{selectedSignal.side === 1 ? "\u25b2" : "\u25bc"}</span>
+              {selectedSignal.side === 1 ? "LONG" : "SHORT"} barriers
+              <span className="ml-1 text-zinc-500">\u2715</span>
+            </button>
+          )}
+          {labeling === "triple_barrier" && !selectedSignal && signals.length > 0 && (
+            <span className="text-[10px] text-zinc-600">
+              Click a signal to show barriers
+            </span>
+          )}
+          <span className="text-[10px] text-zinc-600">
+            {barCount > 0 ? `${barCount} bars` : "No data"}
+          </span>
+        </div>
       </div>
       <div ref={containerRef} className="w-full" />
     </div>

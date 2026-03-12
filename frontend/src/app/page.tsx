@@ -38,7 +38,7 @@ export default function DashboardPage() {
 
   // Fetch bars when selection changes
   useEffect(() => {
-    fetch(`/api/bars/${symbol}/${barType}?limit=500`)
+    fetch(`/api/bars/${symbol}/${barType}?limit=5000`)
       .then((r) => r.json())
       .then((data) => setBars(Array.isArray(data) ? data : []))
       .catch(() => setBars([]));
@@ -46,7 +46,7 @@ export default function DashboardPage() {
 
   // Fetch signals when selection changes
   useEffect(() => {
-    fetch(`/api/signals/${symbol}?bar_type=${barType}&labeling=${labeling}&limit=100`)
+    fetch(`/api/signals/${symbol}?bar_type=${barType}&labeling=${labeling}&limit=1000`)
       .then((r) => r.json())
       .then((data) => setSignals(Array.isArray(data) ? data : []))
       .catch(() => setSignals([]));
@@ -103,7 +103,7 @@ export default function DashboardPage() {
         <MetricsPanel metrics={metrics} />
 
         {/* Chart */}
-        <Chart bars={bars} signals={signals} />
+        <Chart bars={bars} signals={signals} labeling={labeling} />
 
         {/* Signals table */}
         <SignalsTable signals={signals} />
