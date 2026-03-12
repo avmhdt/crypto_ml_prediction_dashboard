@@ -24,7 +24,7 @@ from backend.features import compute_all_features
 from backend.ml.purged_cv import PurgedKFoldCV
 from backend.ml.primary_model import PrimaryModel
 from backend.ml.meta_labeling import MetaLabelingModel
-from backend.ml.bet_sizing import compute_bet_sizes
+from backend.ml.bet_sizing import compute_bet_sizes, DISCRETE_LEVELS
 
 logger = logging.getLogger(__name__)
 
@@ -255,7 +255,7 @@ def train_pipeline(
         "meta_precision": meta_precision,
         "bet_size_distribution": {
             str(level): int((bet_sizes == level).sum())
-            for level in [0.0, 0.25, 0.5, 0.75, 1.0]
+            for level in DISCRETE_LEVELS
         },
         "artifacts": {
             "primary": str(models_dir / f"{prefix}_primary.joblib"),

@@ -52,3 +52,19 @@ export type WSMessage =
   | { type: "bar"; data: BarData }
   | { type: "signal"; data: Signal }
   | { type: "tick"; data: Tick };
+
+export interface EquityMetrics {
+  sharpe: number;
+  max_dd: number;
+  total_return: number;
+  win_rate: number;
+  num_trades: number;
+}
+
+export interface EquityData {
+  timestamps: number[];
+  equity: number[];
+  drawdown: number[];
+  total_invested: number[];
+  metrics: EquityMetrics;
+}

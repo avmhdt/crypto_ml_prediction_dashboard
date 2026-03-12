@@ -207,7 +207,7 @@ def _try_seed_signals(conn, bars_df, symbol, bar_type, barrier_config, bar_confi
             for i in range(len(preds)):
                 if meta_probs[i] < 0.5:
                     continue
-                if bet_sizes[i] < 0.25:
+                if bet_sizes[i] < 0.1:
                     continue
                 row = valid_bars.iloc[i]
                 price = float(row["close"])
@@ -270,8 +270,9 @@ def _seed_synthetic_signals(conn, bars_df, symbol, bar_type):
             continue
         side = int(np.random.choice([-1, 1]))
         meta_prob = round(float(np.random.uniform(0.45, 0.95)), 4)
-        size = float(np.random.choice([0.25, 0.5, 0.75, 1.0],
-                                       p=[0.15, 0.3, 0.35, 0.2]))
+        size = float(np.random.choice(
+            [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+            p=[0.05, 0.05, 0.1, 0.1, 0.15, 0.15, 0.15, 0.1, 0.1, 0.05]))
         price = float(row["close"])
         # Horizon-scaled volatility: per-bar vol * sqrt(horizon_bars)
         per_bar_vol = float(rolling_vol.at[idx])
