@@ -208,3 +208,114 @@ def corwin_schultz_spread(
 
     result = pd.Series(spread_raw, index=high.index)
     return result.rolling(window, min_periods=1).mean().rename("corwin_schultz_spread")
+
+
+def tick_rule(close: pd.Series, window: int = 20) -> pd.Series:
+    """Tick rule: rolling mean of signed price direction.
+
+    Classifies each bar as +1 (uptick), -1 (downtick), or carries
+    forward the last non-zero direction on zero change.
+
+    Parameters
+    ----------
+    close : pd.Series
+        Close price series.
+    window : int
+        Rolling window for averaging.
+
+    Returns
+    -------
+    pd.Series
+        Rolling mean of tick directions in [-1, 1].
+    """
+    diff = close.diff()
+    direction = np.sign(diff)
+    # Forward-fill zeros (carry last direction)
+    direction = direction.replace(0, np.nan).ffill().fillna(1.0)
+    return direction.rolling(window, min_periods=1).mean().rename("tick_rule")
+
+
+def hasbrouck_lambda(
+    close: pd.Series, volume: pd.Series, window: int = 20
+) -> pd.Series:
+    """Hasbrouck price impact (lambda) measure.
+
+    Rolling OLS: |r_t| = alpha + lambda * sign(r_t) * sqrt(V_t).
+    Higher lambda = more price impact per signed order flow = less liquid.
+
+    Parameters
+    ----------
+    close : pd.Series
+        Close price series.
+    volume : pd.Series
+        Volume per bar.
+    window : int
+        Rolling window for regression.
+
+    Returns
+    -------
+    pd.Series
+        Rolling Hasbrouck lambda.
+    """
+    returns = close.pct_change()
+    abs_ret = returns.abs().values.astype(np.float64)
+    sign_ret = np.sign(returns.values).astype(np.float64)
+    sqrt_vol = np.sqrt(volume.values.astype(np.float64))
+    signed_flow = sign_ret * sqrt_vol
+
+    n = len(close)
+    result = np.full(n, np.nan)
+
+    for i in range(window, n):
+        y = abs_ret[i - window + 1 : i + 1]
+        x = signed_flow[i - window + 1 : i + 1]
+        mask = ~(np.isnan(y) | np.isnan(x) | np.isinf(y) | np.isinf(x))
+        if mask.sum() < 5:
+            continue
+        yc = y[mask]
+        xc = x[mask]
+        X = np.column_stack([np.ones(len(xc)), xc])
+        try:
+            beta = np.linalg.lstsq(X, yc, rcond=None)[0]
+            result[i] = float(beta[1])
+        except np.linalg.LinAlgError:
+            continue
+
+    return pd.Series(result, index=close.index, name="hasbrouck_lambda")
+
+
+def vpin(close: pd.Series, volume: pd.Series, window: int = 20) -> pd.Series:
+    """Volume-Synchronized Probability of Informed Trading (VPIN).
+
+    Classifies each bar's volume as buy or sell using price direction,
+    then computes |V_buy - V_sell| / (V_buy + V_sell) over a rolling window.
+
+    Parameters
+    ----------
+    close : pd.Series
+        Close price series.
+    volume : pd.Series
+        Volume per bar.
+    window : int
+        Rolling window (number of bars).
+
+    Returns
+    -------
+    pd.Series
+        VPIN in [0, 1]. Higher = more informed trading.
+    """
+    diff = close.diff()
+    # Buy volume if price went up, sell if down, split 50/50 on no change
+    is_buy = diff > 0
+    is_sell = diff < 0
+    no_change = diff == 0
+
+    buy_vol = volume.where(is_buy, 0.0) + volume.where(no_change, 0.0) * 0.5
+    sell_vol = volume.where(is_sell, 0.0) + volume.where(no_change, 0.0) * 0.5
+
+    rolling_buy = buy_vol.rolling(window, min_periods=1).sum()
+    rolling_sell = sell_vol.rolling(window, min_periods=1).sum()
+
+    total = rolling_buy + rolling_sell
+    vpin_series = (rolling_buy - rolling_sell).abs() / total.replace(0, np.nan)
+    return vpin_series.rename("vpin")

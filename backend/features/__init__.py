@@ -2,7 +2,7 @@
 Feature engineering module.
 
 Exposes ``compute_all_features`` which orchestrates every feature sub-module
-and returns a single wide DataFrame with 50+ columns.
+and returns a single wide DataFrame with 90+ columns.
 """
 
 from __future__ import annotations
@@ -19,15 +19,24 @@ from backend.features.price_features import (
     plugin_entropy,
     lempel_ziv_complexity,
     kontoyiannis_entropy,
+    bde_cusum_stat,
+    csw_cusum_stat,
+    chow_type_df_stat,
+    martingale_tests,
+    rolling_sadf_stat,
 )
+from backend.features.entropy_features import compute_entropy_features
 from backend.features.microstructural_features import (
     order_book_imbalance,
     trade_flow_imbalance,
     amihud_lambda,
     roll_spread,
     corwin_schultz_spread,
+    tick_rule,
+    hasbrouck_lambda,
+    vpin,
 )
-from backend.features.volume_features import compute_volume_features
+from backend.features.volume_features import compute_volume_features, compute_price_stats
 from backend.features.volatility_features import (
     rogers_satchell_vol,
     garman_klass_vol,
@@ -47,9 +56,12 @@ def compute_all_features(
 
     Orchestrates every feature sub-module:
         - Price features (FFD, velocity, acceleration, entropy proxies)
+        - Structural breaks (BDE CUSUM, CSW CUSUM, Chow-type DF, SADF, martingale)
+        - Entropy with multiple encodings (binary, quantile, sigma)
         - Volatility features (RS, GK, YZ, realized vol, bipower)
-        - Volume features (dollar volume, duration, rolling stats)
-        - Microstructural features (if *trades* is provided)
+        - Volume/duration features (dollar volume, duration, rolling stats)
+        - Log price statistics (std, skew, kurtosis)
+        - Microstructural features (tick rule, Hasbrouck, VPIN, Roll, CS, Amihud)
         - Time features (cyclical encoding)
 
     Parameters
@@ -67,7 +79,7 @@ def compute_all_features(
     Returns
     -------
     pd.DataFrame
-        Wide DataFrame aligned to *bars* index with 50+ feature columns.
+        Wide DataFrame aligned to *bars* index with 90+ feature columns.
     """
     frames: list[pd.DataFrame] = []
 
@@ -140,6 +152,22 @@ def compute_all_features(
 
     frames.append(price_df)
 
+    # ----- Structural breaks features -----
+    struct_window = max(window, 50)  # structural tests need larger windows
+    breaks_df = pd.DataFrame(index=bars.index)
+    breaks_df["bde_cusum"] = bde_cusum_stat(log_close, window=struct_window)
+    breaks_df["csw_cusum"] = csw_cusum_stat(log_close, window=struct_window)
+    breaks_df["chow_type_df"] = chow_type_df_stat(log_close, window=struct_window)
+    breaks_df["rolling_sadf"] = rolling_sadf_stat(log_close, window=struct_window)
+
+    mart_df = martingale_tests(log_close, window=struct_window)
+    breaks_df = pd.concat([breaks_df, mart_df], axis=1)
+    frames.append(breaks_df)
+
+    # ----- Entropy features with multiple encodings -----
+    entropy_df = compute_entropy_features(returns, window=window)
+    frames.append(entropy_df)
+
     # ----- Volatility features -----
     o, h, l, c = bars["open"], bars["high"], bars["low"], bars["close"]
 
@@ -156,17 +184,19 @@ def compute_all_features(
 
     frames.append(vol_df)
 
-    # ----- Volume features -----
+    # ----- Volume and duration features -----
     vol_feat = compute_volume_features(bars, window=window)
     frames.append(vol_feat)
+
+    # ----- Log price statistics -----
+    price_stats = compute_price_stats(bars, window=window)
+    frames.append(price_stats)
 
     # ----- Microstructural features -----
     micro_df = pd.DataFrame(index=bars.index)
 
     if trades is not None and len(trades) > 0:
         # Aggregate trade-level features to bar level
-        # Expect trades to have bar_index or be alignable; if not, compute
-        # bar-level proxies from the bars themselves.
         if "is_buyer_maker" in trades.columns:
             is_bm = trades["is_buyer_maker"].astype(bool)
             trade_vol = trades["qty"] if "qty" in trades.columns else trades["volume"]
@@ -174,14 +204,12 @@ def compute_all_features(
             obi = order_book_imbalance(is_bm, trade_vol, window=window)
             tfi = trade_flow_imbalance(is_bm, window=window)
 
-            # Resample to bar-level if trades have a bar_index column
             if "bar_index" in trades.columns:
                 obi_bar = obi.groupby(trades["bar_index"]).last().reindex(bars.index)
                 tfi_bar = tfi.groupby(trades["bar_index"]).last().reindex(bars.index)
                 micro_df["order_book_imbalance"] = obi_bar
                 micro_df["trade_flow_imbalance"] = tfi_bar
             else:
-                # Fallback: use last N trade values per bar as proxy
                 micro_df["order_book_imbalance"] = np.nan
                 micro_df["trade_flow_imbalance"] = np.nan
 
@@ -193,6 +221,9 @@ def compute_all_features(
     micro_df["corwin_schultz_spread"] = corwin_schultz_spread(
         bars["high"], bars["low"], window=window
     )
+    micro_df["tick_rule"] = tick_rule(bars["close"], window=window)
+    micro_df["hasbrouck_lambda"] = hasbrouck_lambda(bars["close"], bars["volume"], window=window)
+    micro_df["vpin"] = vpin(bars["close"], bars["volume"], window=window)
 
     # Higher-order stats on micro features
     micro_df["spread_variance"] = micro_df["roll_spread"].rolling(window, min_periods=1).var()

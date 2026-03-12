@@ -63,4 +63,45 @@ def compute_volume_features(bars: pd.DataFrame, window: int = 20) -> pd.DataFram
     result["volume_skew"] = rolling_dv.skew()
     result["volume_kurtosis"] = rolling_dv.kurt()
 
+    # Duration velocity and acceleration (on log scale)
+    log_dur = result["log_duration"]
+    result["duration_velocity"] = log_dur.diff()
+    result["duration_acceleration"] = log_dur.diff().diff()
+
+    # Rolling statistics on duration
+    rolling_dur = dur.rolling(window, min_periods=1)
+    result["duration_variance"] = rolling_dur.var()
+    result["duration_skew"] = rolling_dur.skew()
+    result["duration_kurtosis"] = rolling_dur.kurt()
+
+    return result
+
+
+def compute_price_stats(bars: pd.DataFrame, window: int = 20) -> pd.DataFrame:
+    """Rolling higher-order statistics on log prices.
+
+    Computes standard deviation, skewness, and kurtosis of log prices
+    over a rolling window.  These capture the distribution shape of the
+    price level itself (not returns).
+
+    Parameters
+    ----------
+    bars : pd.DataFrame
+        Bar data with ``close`` column.
+    window : int
+        Rolling window size.
+
+    Returns
+    -------
+    pd.DataFrame
+        Columns: log_price_std, log_price_skew, log_price_kurtosis.
+    """
+    result = pd.DataFrame(index=bars.index)
+    log_prices = np.log(bars["close"].astype(np.float64))
+
+    rolling_lp = log_prices.rolling(window, min_periods=1)
+    result["log_price_std"] = rolling_lp.std()
+    result["log_price_skew"] = rolling_lp.skew()
+    result["log_price_kurtosis"] = rolling_lp.kurt()
+
     return result
