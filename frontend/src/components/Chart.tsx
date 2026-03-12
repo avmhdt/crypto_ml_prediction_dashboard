@@ -14,6 +14,7 @@ import {
   type CandlestickData,
   type SeriesMarker,
   type Time,
+  type Logical,
   ColorType,
 } from "lightweight-charts";
 import type { BarData, Signal } from "@/lib/types";
@@ -109,19 +110,40 @@ export function Chart({ bars, signals, labeling }: ChartProps) {
 
     // Draw vertical time barrier
     if (signal.time_barrier != null && chartRef.current) {
-      const tbTime = (signal.time_barrier / 1000) as Time;
+      const tbTimeSec = signal.time_barrier / 1000;
       const chart = chartRef.current;
 
+      // Compute the logical index for the time barrier.
+      // This works even when the timestamp falls beyond the last bar
+      // (where timeToCoordinate would return null).
+      const sortedBars = [...bars].sort((a, b) => a.timestamp - b.timestamp);
+      const lastBar = sortedBars[sortedBars.length - 1];
+      const firstBar = sortedBars[0];
+      const lastBarTimeSec = lastBar ? lastBar.timestamp / 1000 : 0;
+      const avgIntervalSec =
+        sortedBars.length > 1
+          ? (lastBar.timestamp - firstBar.timestamp) /
+            (1000 * (sortedBars.length - 1))
+          : 60; // fallback: 1 minute
+
       const updateVerticalPos = () => {
-        const coord = chart.timeScale().timeToCoordinate(tbTime);
-        if (
-          coord !== null &&
-          coord !== undefined &&
-          verticalBarrierRef.current
-        ) {
+        if (!verticalBarrierRef.current) return;
+
+        // Try direct coordinate first (works when time_barrier is within data range)
+        let coord = chart.timeScale().timeToCoordinate(tbTimeSec as Time);
+
+        // If null, extrapolate using logical coordinates
+        if (coord === null || coord === undefined) {
+          const lastLogical = sortedBars.length - 1;
+          const barsAhead = (tbTimeSec - lastBarTimeSec) / avgIntervalSec;
+          const tbLogical = lastLogical + barsAhead;
+          coord = chart.timeScale().logicalToCoordinate(tbLogical as Logical);
+        }
+
+        if (coord !== null && coord !== undefined) {
           verticalBarrierRef.current.style.left = `${coord}px`;
           verticalBarrierRef.current.style.display = "block";
-        } else if (verticalBarrierRef.current) {
+        } else {
           verticalBarrierRef.current.style.display = "none";
         }
       };
@@ -135,7 +157,7 @@ export function Chart({ bars, signals, labeling }: ChartProps) {
         .subscribeVisibleLogicalRangeChange(updateVerticalPos);
       rangeHandlerRef.current = updateVerticalPos;
     }
-  }, [clearBarriers]);
+  }, [clearBarriers, bars]);
 
   // Initialize chart
   useEffect(() => {

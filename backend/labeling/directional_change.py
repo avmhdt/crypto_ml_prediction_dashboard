@@ -148,7 +148,7 @@ def directional_change_labels(
 
 def dc_labels_from_volatility(
     bars: pd.DataFrame,
-    vol_window: int = 20,
+    vol_window: int = 50,
     multipliers: list[float] | None = None,
 ) -> pd.DataFrame:
     """Directional-change labeling with theta derived from rolling volatility.
@@ -165,7 +165,7 @@ def dc_labels_from_volatility(
         Rolling window length for volatility estimation.
     multipliers : list[float], optional
         Multiples of volatility to use as theta levels.
-        Defaults to ``[0.5, 1.0, 1.5, 2.0, 3.0]``.
+        Defaults to ``[2.0, 3.0, 5.0, 8.0, 13.0]``.
 
     Returns
     -------
@@ -174,16 +174,17 @@ def dc_labels_from_volatility(
         ``label`` is always in {-1, 1}.
     """
     if multipliers is None:
-        multipliers = [0.5, 1.0, 1.5, 2.0, 3.0]
+        multipliers = [2.0, 3.0, 5.0, 8.0, 13.0]
 
     close = bars["close"].values.astype(np.float64)
 
-    # Rolling volatility of log returns.
+    # Rolling volatility of log returns — use a longer window for a
+    # smoother, more stable volatility estimate that produces larger
+    # theta values and fewer, more significant DC events.
     log_ret = np.diff(np.log(close))
     if len(log_ret) < vol_window:
         vol_estimate = np.std(log_ret) if len(log_ret) > 0 else 0.01
     else:
-        # Use the most recent window for a representative volatility.
         vol_estimate = np.std(log_ret[-vol_window:])
 
     # Ensure a positive floor.
