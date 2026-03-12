@@ -97,8 +97,12 @@ class LivePipeline:
                         loaded += 1
 
                         if meta_path.exists():
+                            meta_features_path = models_dir / f"{prefix}_meta_features.json"
                             mm = MetaLabelingModel()
-                            mm.load(meta_path)
+                            mm.load(meta_path, meta_features_path)
+                            # Backward compat: use primary feature names if meta has none
+                            if not mm.feature_names:
+                                mm.feature_names = pm.feature_names
                             self._meta_models[key] = mm
                     except Exception as e:
                         logger.error(f"Failed to load model {key}: {e}")

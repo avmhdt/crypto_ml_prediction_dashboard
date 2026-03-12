@@ -166,7 +166,11 @@ def _try_seed_signals(conn, bars_df, symbol, bar_type, barrier_config, bar_confi
             preds = primary.predict(features)
 
             meta = MetaLabelingModel()
-            meta.load(secondary_path)
+            meta_features_path = MODELS_DIR / f"{prefix}_meta_features.json"
+            meta.load(secondary_path, meta_features_path)
+            # Backward compat: if no meta_features.json, use primary's feature names
+            if not meta.feature_names:
+                meta.feature_names = primary.feature_names
             meta_probs = meta.predict_proba(features, preds)
             bet_sizes = compute_bet_sizes(meta_probs)
 

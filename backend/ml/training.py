@@ -209,7 +209,10 @@ def train_pipeline(
         models_dir / f"{prefix}_scaler.joblib",
         models_dir / f"{prefix}_features.json",
     )
-    meta_model.save(models_dir / f"{prefix}_secondary.joblib")
+    meta_model.save(
+        models_dir / f"{prefix}_secondary.joblib",
+        models_dir / f"{prefix}_meta_features.json",
+    )
 
     results = {
         "symbol": symbol,
