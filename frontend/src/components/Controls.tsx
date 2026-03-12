@@ -12,6 +12,63 @@ interface ControlsProps {
   onLabelingChange: (labeling: string) => void;
 }
 
+const DISPLAY_NAMES: Record<string, string> = {
+  time: "Time",
+  tick: "Tick",
+  volume: "Volume",
+  dollar: "Dollar",
+  tick_imbalance: "Tick Imb",
+  volume_imbalance: "Vol Imb",
+  dollar_imbalance: "$ Imb",
+  tick_run: "Tick Run",
+  volume_run: "Vol Run",
+  dollar_run: "$ Run",
+  triple_barrier: "Triple Barrier",
+  trend_scanning: "Trend Scan",
+  directional_change: "Dir Change",
+};
+
+function PillGroup<T extends string>({
+  label,
+  items,
+  selected,
+  onChange,
+  colorFn,
+}: {
+  label: string;
+  items: T[];
+  selected: T;
+  onChange: (v: T) => void;
+  colorFn?: (item: T, isSelected: boolean) => string;
+}) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <span className="text-[10px] font-medium uppercase tracking-widest text-zinc-500">
+        {label}
+      </span>
+      <div className="flex flex-wrap gap-1">
+        {items.map((item) => {
+          const isSelected = item === selected;
+          const colorClass = colorFn
+            ? colorFn(item, isSelected)
+            : isSelected
+              ? "border-blue-500/50 bg-blue-500/10 text-blue-400"
+              : "border-transparent bg-zinc-800/40 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-300";
+          return (
+            <button
+              key={item}
+              onClick={() => onChange(item)}
+              className={`rounded-md border px-2.5 py-1 text-xs font-medium transition-all duration-150 ${colorClass}`}
+            >
+              {DISPLAY_NAMES[item] ?? item.replace(/USDT$/, "")}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export function Controls({
   symbols,
   barTypes,
@@ -24,51 +81,32 @@ export function Controls({
   onLabelingChange,
 }: ControlsProps) {
   return (
-    <div className="flex flex-wrap items-center gap-4 border-b border-zinc-800 bg-zinc-950 px-6 py-3">
-      <div className="flex items-center gap-2">
-        <label className="text-xs font-medium text-zinc-400">Symbol</label>
-        <select
-          value={selectedSymbol}
-          onChange={(e) => onSymbolChange(e.target.value)}
-          className="rounded border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-white focus:border-blue-500 focus:outline-none"
-        >
-          {symbols.map((s) => (
-            <option key={s} value={s}>
-              {s}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <div className="flex items-center gap-2">
-        <label className="text-xs font-medium text-zinc-400">Bar Type</label>
-        <select
-          value={selectedBarType}
-          onChange={(e) => onBarTypeChange(e.target.value)}
-          className="rounded border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-white focus:border-blue-500 focus:outline-none"
-        >
-          {barTypes.map((bt) => (
-            <option key={bt} value={bt}>
-              {bt.replace(/_/g, " ")}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <div className="flex items-center gap-2">
-        <label className="text-xs font-medium text-zinc-400">Labeling</label>
-        <select
-          value={selectedLabeling}
-          onChange={(e) => onLabelingChange(e.target.value)}
-          className="rounded border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-white focus:border-blue-500 focus:outline-none"
-        >
-          {labelingMethods.map((lm) => (
-            <option key={lm} value={lm}>
-              {lm.replace(/_/g, " ")}
-            </option>
-          ))}
-        </select>
-      </div>
+    <div className="flex flex-wrap items-start gap-6 border-b border-[var(--border)] bg-[var(--surface)] px-6 py-3">
+      <PillGroup
+        label="Symbol"
+        items={symbols}
+        selected={selectedSymbol}
+        onChange={onSymbolChange}
+        colorFn={(_, isSelected) =>
+          isSelected
+            ? "border-yellow-500/40 bg-yellow-500/10 text-yellow-400"
+            : "border-transparent bg-zinc-800/40 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-300"
+        }
+      />
+      <div className="hidden h-10 w-px self-center bg-zinc-800 sm:block" />
+      <PillGroup
+        label="Bar Type"
+        items={barTypes}
+        selected={selectedBarType}
+        onChange={onBarTypeChange}
+      />
+      <div className="hidden h-10 w-px self-center bg-zinc-800 sm:block" />
+      <PillGroup
+        label="Labeling"
+        items={labelingMethods}
+        selected={selectedLabeling}
+        onChange={onLabelingChange}
+      />
     </div>
   );
 }

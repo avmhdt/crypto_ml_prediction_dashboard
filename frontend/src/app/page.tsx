@@ -85,7 +85,7 @@ export default function DashboardPage() {
   });
 
   return (
-    <div className="flex min-h-screen flex-col bg-zinc-950 text-white">
+    <div className="flex min-h-screen flex-col bg-[var(--background)] text-[var(--foreground)]">
       <Header connected={connected} symbol={symbol} />
       <Controls
         symbols={config.symbols}
@@ -98,10 +98,25 @@ export default function DashboardPage() {
         onBarTypeChange={setBarType}
         onLabelingChange={setLabeling}
       />
-      <main className="flex-1 space-y-4 p-4">
-        <Chart bars={bars} signals={signals} />
+      <main className="flex-1 space-y-4 p-4 lg:p-6">
+        {/* Metrics row */}
         <MetricsPanel metrics={metrics} />
+
+        {/* Chart */}
+        <Chart bars={bars} signals={signals} />
+
+        {/* Signals table */}
         <SignalsTable signals={signals} />
+
+        {/* Footer bar */}
+        <div className="flex items-center justify-between rounded-lg border border-[var(--border)] bg-[var(--surface)] px-4 py-2 text-[10px] text-zinc-600">
+          <span>
+            AFML Pipeline &middot; LightGBM + Purged CV + Meta-Labeling + Bet Sizing
+          </span>
+          <span className="num">
+            {barType.replace(/_/g, " ")} &middot; {labeling.replace(/_/g, " ")}
+          </span>
+        </div>
       </main>
     </div>
   );

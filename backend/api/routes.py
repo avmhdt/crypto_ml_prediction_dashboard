@@ -1,4 +1,5 @@
 """REST API routes for the dashboard."""
+import numpy as np
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
@@ -111,3 +112,46 @@ async def get_metrics(
         "avg_meta_prob": float(df["meta_probability"].mean()) if "meta_probability" in df.columns else 0.0,
         "avg_bet_size": float(df["size"].mean()) if "size" in df.columns else 0.0,
     }
+
+
+@router.post("/seed-signals/{symbol}")
+async def seed_signals(request: Request, symbol: str, bar_type: str = "time"):
+    """Generate demo signals from existing bar data for dashboard display."""
+    if symbol not in SYMBOLS:
+        raise HTTPException(status_code=404, detail=f"Symbol {symbol} not found")
+
+    conn = request.app.state.db
+    bars_df = load_bars(conn, symbol, bar_type, limit=500)
+    if bars_df.empty:
+        return {"status": "no bars", "count": 0}
+
+    np.random.seed(42)
+    count = 0
+    for _, row in bars_df.iterrows():
+        if np.random.random() > 0.12:
+            continue
+        side = int(np.random.choice([-1, 1]))
+        vol = float(row["high"] - row["low"])
+        if vol <= 0:
+            continue
+        meta_prob = round(float(np.random.uniform(0.45, 0.95)), 4)
+        size = float(np.random.choice([0.25, 0.5, 0.75, 1.0], p=[0.15, 0.3, 0.35, 0.2]))
+        sl = float(row["close"]) - side * vol * 2.0
+        pt = float(row["close"]) + side * vol * 2.0
+        tb = int(row["timestamp"]) + 50 * 60000
+
+        for labeling in LABELING_METHODS:
+            try:
+                conn.execute(
+                    """INSERT INTO signals (symbol, bar_type, labeling_method,
+                       timestamp, side, size, entry_price, sl_price, pt_price,
+                       time_barrier, meta_probability)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    [symbol, bar_type, labeling, int(row["timestamp"]),
+                     side, size, float(row["close"]), sl, pt, tb, meta_prob],
+                )
+                count += 1
+            except Exception:
+                pass
+
+    return {"status": "seeded", "count": count}
