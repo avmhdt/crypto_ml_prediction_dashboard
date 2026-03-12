@@ -19,6 +19,7 @@ class PrimaryModel:
             "objective": "binary",
             "metric": "binary_logloss",
             "boosting_type": "gbdt",
+            "is_unbalance": True,
             "n_estimators": 500,
             "max_depth": 6,
             "learning_rate": 0.05,

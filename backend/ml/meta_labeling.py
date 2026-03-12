@@ -24,6 +24,7 @@ class MetaLabelingModel:
             "objective": "binary",
             "metric": "binary_logloss",
             "boosting_type": "gbdt",
+            "is_unbalance": True,
             "n_estimators": 300,
             "max_depth": 4,
             "learning_rate": 0.05,
