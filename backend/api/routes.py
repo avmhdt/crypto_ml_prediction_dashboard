@@ -154,4 +154,5 @@ async def seed_signals(request: Request, symbol: str, bar_type: str = "time"):
             except Exception:
                 pass
 
+    conn.execute("CHECKPOINT")
     return {"status": "seeded", "count": count}
