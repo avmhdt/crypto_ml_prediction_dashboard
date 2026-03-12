@@ -89,8 +89,10 @@ def triple_barrier_labels(
     time_barrier_indices = np.empty(n, dtype=np.int64)
 
     for i in range(n):
-        sl_price = close[i] - sl_mult * vol[i]
-        pt_price = close[i] + pt_mult * vol[i]
+        # vol[i] is in log-return space (dimensionless); scale by close price
+        # to convert to price-space barriers.
+        sl_price = close[i] * (1 - sl_mult * vol[i])
+        pt_price = close[i] * (1 + pt_mult * vol[i])
         tb_idx = min(i + max_hold, n - 1)
 
         sl_prices[i] = sl_price

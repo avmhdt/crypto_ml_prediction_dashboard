@@ -141,8 +141,12 @@ def train_pipeline(
     if len(features) == 0:
         raise ValueError("No valid samples after feature warm-up (all rows have NaN)")
     labels = bars["label"].values.astype(int)
+    n_long = int((labels == 1).sum())
+    n_short = int((labels == -1).sum())
     logger.info(f"Samples after feature warm-up: {len(features):,}, "
                 f"Features: {features.shape[1]}")
+    logger.info(f"Label distribution: LONG={n_long} ({100*n_long/len(labels):.1f}%), "
+                f"SHORT={n_short} ({100*n_short/len(labels):.1f}%)")
 
     # Step 4: Compute sample weights
     logger.info("Computing sample weights...")
