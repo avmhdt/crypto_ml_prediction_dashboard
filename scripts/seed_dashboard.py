@@ -92,6 +92,13 @@ def main():
             continue
         print(f"  Generated {len(bars_df):,} bars")
 
+        # Shift timestamps so data ends at "now" (prevents prune_old_data from deleting)
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        max_ts = int(bars_df["timestamp"].max())
+        ts_offset = now_ms - max_ts
+        bars_df["timestamp"] = bars_df["timestamp"] + ts_offset
+        print(f"  Shifted timestamps to end at now (offset: {ts_offset / 3600000:.1f}h)")
+
         # Insert bars into DuckDB
         inserted = 0
         for _, row in bars_df.iterrows():
