@@ -37,11 +37,20 @@ export function Chart({ bars, signals, labeling }: ChartProps) {
   const rangeHandlerRef = useRef<(() => void) | null>(null);
   const [selectedSignal, setSelectedSignal] = useState<Signal | null>(null);
 
-  // Sort bars once, share everywhere
-  const sortedBars = useMemo(
-    () => [...bars].sort((a, b) => a.timestamp - b.timestamp),
-    [bars]
-  );
+  // Sort bars and deduplicate timestamps (lightweight-charts requires strictly ascending)
+  const sortedBars = useMemo(() => {
+    const sorted = [...bars].sort((a, b) => a.timestamp - b.timestamp);
+    // Keep last bar per timestamp (dedup collisions from fast bar generators)
+    const deduped: typeof sorted = [];
+    for (const bar of sorted) {
+      if (deduped.length > 0 && bar.timestamp === deduped[deduped.length - 1].timestamp) {
+        deduped[deduped.length - 1] = bar;
+      } else {
+        deduped.push(bar);
+      }
+    }
+    return deduped;
+  }, [bars]);
 
   // Store bar metadata in ref so drawBarriers/updateVerticalPos read fresh values
   // without needing `bars` in their dependency arrays
