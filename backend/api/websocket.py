@@ -69,60 +69,67 @@ def _get_pipeline(symbol: str) -> LivePipeline:
 
 async def _run_live_feed(symbol: str):
     """Run live feed for a symbol, processing ticks through the full pipeline."""
-    feed = BinanceLiveFeed(symbol)
-    _active_feeds[symbol] = feed
-    pipeline = _get_pipeline(symbol)
-
-    conn = get_connection()
-    last_prune = time.time()
-
-    async def on_batch():
-        nonlocal last_prune
-        ticks = await feed.flush_buffer()
-        if ticks:
-            # Insert raw ticks into DuckDB
-            insert_ticks_batch(conn, ticks)
-
-            # Process ticks through pipeline (bars + inference)
-            events = pipeline.process_ticks_batch(ticks)
-
-            # Persist and broadcast each event
-            for event in events:
-                if event["type"] == "bar":
-                    _insert_bar(conn, event["data"])
-                elif event["type"] == "signal":
-                    _insert_signal(conn, event["data"])
-                await manager.broadcast(symbol, event)
-
-            # Also broadcast latest tick for real-time price display
-            latest = ticks[-1]
-            await manager.broadcast(symbol, {
-                "type": "tick",
-                "data": {
-                    "price": latest["price"],
-                    "qty": latest["qty"],
-                    "time": latest["time"],
-                    "is_buyer_maker": latest["is_buyer_maker"],
-                },
-            })
-
-        # Prune old data every 5 minutes
-        if time.time() - last_prune > 300:
-            prune_old_data(conn, int(time.time() * 1000))
-            last_prune = time.time()
-
-    # Start feed in background
-    feed_task = asyncio.create_task(feed.start())
-
     try:
-        while True:
-            await asyncio.sleep(1)
-            await on_batch()
-    except asyncio.CancelledError:
-        await feed.stop()
-        feed_task.cancel()
-    finally:
-        conn.close()
+        logger.info(f"Starting live feed for {symbol}")
+        feed = BinanceLiveFeed(symbol)
+        _active_feeds[symbol] = feed
+        pipeline = _get_pipeline(symbol)
+        logger.info(f"Pipeline ready for {symbol}, models_loaded={pipeline._models_loaded}")
+
+        conn = get_connection()
+        logger.info(f"DuckDB connection opened for {symbol} live feed")
+        last_prune = time.time()
+
+        async def on_batch():
+            nonlocal last_prune
+            ticks = await feed.flush_buffer()
+            if ticks:
+                # Insert raw ticks into DuckDB
+                insert_ticks_batch(conn, ticks)
+
+                # Process ticks through pipeline (bars + inference)
+                events = pipeline.process_ticks_batch(ticks)
+
+                # Persist and broadcast each event
+                for event in events:
+                    if event["type"] == "bar":
+                        _insert_bar(conn, event["data"])
+                        logger.info(f"New {event['data']['bar_type']} bar for {symbol}: close={event['data']['close']}")
+                    elif event["type"] == "signal":
+                        _insert_signal(conn, event["data"])
+                    await manager.broadcast(symbol, event)
+
+                # Also broadcast latest tick for real-time price display
+                latest = ticks[-1]
+                await manager.broadcast(symbol, {
+                    "type": "tick",
+                    "data": {
+                        "price": latest["price"],
+                        "qty": latest["qty"],
+                        "time": latest["time"],
+                        "is_buyer_maker": latest["is_buyer_maker"],
+                    },
+                })
+
+            # Prune old data every 5 minutes
+            if time.time() - last_prune > 300:
+                prune_old_data(conn, int(time.time() * 1000))
+                last_prune = time.time()
+
+        # Start feed in background
+        feed_task = asyncio.create_task(feed.start())
+
+        try:
+            while True:
+                await asyncio.sleep(1)
+                await on_batch()
+        except asyncio.CancelledError:
+            await feed.stop()
+            feed_task.cancel()
+        finally:
+            conn.close()
+    except Exception:
+        logger.exception(f"Live feed for {symbol} crashed")
 
 
 def _insert_bar(conn, bar_data: dict) -> None:
@@ -168,9 +175,20 @@ def _ensure_feed_running(symbol: str):
     """Ensure live feed is running for a symbol."""
     symbol_upper = symbol.upper()
     if symbol_upper not in _feed_tasks or _feed_tasks[symbol_upper].done():
+        logger.info(f"Launching feed task for {symbol_upper}")
+        if symbol_upper in _feed_tasks and _feed_tasks[symbol_upper].done():
+            exc = _feed_tasks[symbol_upper].exception()
+            if exc:
+                logger.error(f"Previous feed task for {symbol_upper} failed: {exc}")
         _feed_tasks[symbol_upper] = asyncio.create_task(
             _run_live_feed(symbol_upper)
         )
+
+
+def start_all_feeds():
+    """Start live feeds for all configured symbols (called at app startup)."""
+    for symbol in SYMBOLS:
+        _ensure_feed_running(symbol)
 
 
 @router.websocket("/ws/{symbol}")

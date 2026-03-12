@@ -4,7 +4,6 @@ Connects to Binance's public market data WebSocket (no API key needed)
 and streams real-time trade data for a given symbol.
 """
 import asyncio
-import json
 import logging
 from collections.abc import Callable
 from binance import AsyncClient, BinanceSocketManager
@@ -25,18 +24,20 @@ class BinanceLiveFeed:
         self._buffer_lock = asyncio.Lock()
 
     async def start(self) -> None:
-        """Start streaming trade data."""
+        """Start streaming trade data from Binance perpetual futures."""
         self._client = await AsyncClient.create()
         self._bsm = BinanceSocketManager(self._client)
         self._running = True
 
-        ts = self._bsm.trade_socket(self.symbol, futures=True)
+        ts = self._bsm.aggtrade_futures_socket(self.symbol)
         async with ts as stream:
             while self._running:
                 try:
-                    msg = await asyncio.wait_for(stream.recv(), timeout=30)
-                    if msg is None:
+                    raw = await asyncio.wait_for(stream.recv(), timeout=30)
+                    if raw is None:
                         continue
+                    # Unwrap {stream, data} envelope
+                    msg = raw.get("data", raw) if isinstance(raw, dict) else raw
                     tick = self._parse_trade(msg)
                     if tick:
                         async with self._buffer_lock:
@@ -65,11 +66,11 @@ class BinanceLiveFeed:
         return ticks
 
     def _parse_trade(self, msg: dict) -> dict | None:
-        """Parse Binance WebSocket trade message to internal format."""
-        if msg.get("e") != "trade":
+        """Parse Binance WebSocket aggTrade message to internal format."""
+        if msg.get("e") != "aggTrade":
             return None
         return {
-            "id": msg["t"],
+            "id": msg["a"],
             "symbol": self.symbol.upper(),
             "price": float(msg["p"]),
             "qty": float(msg["q"]),

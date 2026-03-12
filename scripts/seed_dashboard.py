@@ -24,7 +24,9 @@ from backend.config import (
 
 def main():
     parser = argparse.ArgumentParser(description="Seed dashboard with historical data")
-    parser.add_argument("--symbol", default="BTCUSDT")
+    parser.add_argument("--symbols", nargs="+",
+                        default=["BTCUSDT", "ETHUSDT", "SOLUSDT"],
+                        help="Symbols to seed (default: BTC, ETH, SOL)")
     parser.add_argument("--days", type=int, default=3,
                         help="Days of recent data to seed")
     parser.add_argument("--bar-types", nargs="+",
@@ -46,22 +48,10 @@ def main():
                      timedelta(days=args.days)).timestamp() * 1000)
 
     print(f"Seeding dashboard DB: {DB_PATH}")
-    print(f"Symbol: {args.symbol}")
+    print(f"Symbols: {args.symbols}")
     print(f"Bar types: {args.bar_types}")
     print(f"Time range: {datetime.fromtimestamp(start_ms/1000, tz=timezone.utc).date()} "
           f"to {datetime.fromtimestamp(end_ms/1000, tz=timezone.utc).date()}")
-
-    # Load trades
-    from backend.data.csv_reader import read_trades_for_symbol
-    print(f"\nLoading trades...")
-    trades = read_trades_for_symbol(
-        args.symbol, Path(args.data_dir),
-        start_time=start_ms, end_time=end_ms,
-    )
-    if trades.empty:
-        print("ERROR: No trades found. Check data path.")
-        sys.exit(1)
-    print(f"Loaded {len(trades):,} trades")
 
     # Connect to dashboard DuckDB
     import duckdb
@@ -75,61 +65,77 @@ def main():
     from backend.ml.meta_labeling import MetaLabelingModel
     from backend.ml.bet_sizing import compute_bet_sizes
     from backend.features import compute_all_features
+    from backend.data.csv_reader import read_trades_for_symbol
 
     bar_config = BarConfig()
     barrier_config = TripleBarrierConfig()
 
-    for bar_type in args.bar_types:
-        print(f"\n--- Generating {bar_type} bars ---")
-        try:
-            bars_df = generate_bars(trades, args.symbol, bar_type, bar_config)
-        except Exception as e:
-            print(f"  FAILED: {e}")
-            continue
+    for symbol in args.symbols:
+        print(f"\n{'='*50}")
+        print(f"Seeding {symbol}")
+        print(f"{'='*50}")
 
-        if bars_df.empty or len(bars_df) < 10:
-            print(f"  Skipped: only {len(bars_df)} bars")
-            continue
-        print(f"  Generated {len(bars_df):,} bars")
-
-        # Shift timestamps so data ends at "now" (prevents prune_old_data from deleting)
-        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-        max_ts = int(bars_df["timestamp"].max())
-        ts_offset = now_ms - max_ts
-        bars_df["timestamp"] = bars_df["timestamp"] + ts_offset
-        print(f"  Shifted timestamps to end at now (offset: {ts_offset / 3600000:.1f}h)")
-
-        # Insert bars into DuckDB
-        inserted = 0
-        for _, row in bars_df.iterrows():
-            try:
-                conn.execute(
-                    """INSERT INTO bars (symbol, bar_type, timestamp, open, high, low,
-                       close, volume, dollar_volume, tick_count, duration_us)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    [
-                        args.symbol, bar_type,
-                        int(row["timestamp"]),
-                        float(row["open"]), float(row["high"]),
-                        float(row["low"]), float(row["close"]),
-                        float(row["volume"]),
-                        float(row.get("dollar_volume", row["volume"] * row["close"])),
-                        int(row.get("tick_count", 0)),
-                        int(row.get("duration_us", 0)),
-                    ],
-                )
-                inserted += 1
-            except Exception:
-                pass
-        print(f"  Inserted {inserted:,} bars into DB")
-
-        # Try ML model signals first, fall back to synthetic
-        ml_ok = _try_seed_signals(
-            conn, bars_df, args.symbol, bar_type,
-            barrier_config, bar_config,
+        # Load trades for this symbol
+        trades = read_trades_for_symbol(
+            symbol, Path(args.data_dir),
+            start_time=start_ms, end_time=end_ms,
         )
-        if not ml_ok:
-            _seed_synthetic_signals(conn, bars_df, args.symbol, bar_type)
+        if trades.empty:
+            print(f"  No trades found for {symbol}, skipping.")
+            continue
+        print(f"  Loaded {len(trades):,} trades")
+
+        for bar_type in args.bar_types:
+            print(f"\n  --- {symbol} / {bar_type} bars ---")
+            try:
+                bars_df = generate_bars(trades, symbol, bar_type, bar_config)
+            except Exception as e:
+                print(f"    FAILED: {e}")
+                continue
+
+            if bars_df.empty or len(bars_df) < 10:
+                print(f"    Skipped: only {len(bars_df)} bars")
+                continue
+            print(f"    Generated {len(bars_df):,} bars")
+
+            # Shift timestamps so data ends at "now" (prevents prune_old_data from deleting)
+            now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+            max_ts = int(bars_df["timestamp"].max())
+            ts_offset = now_ms - max_ts
+            bars_df["timestamp"] = bars_df["timestamp"] + ts_offset
+            print(f"    Shifted timestamps to end at now (offset: {ts_offset / 3600000:.1f}h)")
+
+            # Insert bars into DuckDB
+            inserted = 0
+            for _, row in bars_df.iterrows():
+                try:
+                    conn.execute(
+                        """INSERT INTO bars (symbol, bar_type, timestamp, open, high, low,
+                           close, volume, dollar_volume, tick_count, duration_us)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        [
+                            symbol, bar_type,
+                            int(row["timestamp"]),
+                            float(row["open"]), float(row["high"]),
+                            float(row["low"]), float(row["close"]),
+                            float(row["volume"]),
+                            float(row.get("dollar_volume", row["volume"] * row["close"])),
+                            int(row.get("tick_count", 0)),
+                            int(row.get("duration_us", 0)),
+                        ],
+                    )
+                    inserted += 1
+                except Exception:
+                    pass
+            print(f"    Inserted {inserted:,} bars into DB")
+
+            # Try ML model signals first, fall back to synthetic
+            ml_ok = _try_seed_signals(
+                conn, bars_df, symbol, bar_type,
+                barrier_config, bar_config,
+            )
+            if not ml_ok:
+                _seed_synthetic_signals(conn, bars_df, symbol, bar_type)
 
     # Force WAL flush so data survives force-kills
     conn.execute("CHECKPOINT")
