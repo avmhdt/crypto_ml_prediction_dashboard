@@ -15,6 +15,9 @@ env/
 # ML artifacts
 models/*.joblib
 models/*.pkl
+backend/models/*.joblib
+backend/models/*.json
+backend/models/*.pkl
 *.h5
 *.onnx
 

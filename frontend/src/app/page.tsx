@@ -6,6 +6,7 @@ import { Controls } from "@/components/Controls";
 import { Chart } from "@/components/Chart";
 import { SignalsTable } from "@/components/SignalsTable";
 import { MetricsPanel } from "@/components/MetricsPanel";
+import { EquityCurve } from "@/components/EquityCurve";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import type { BarData, Signal, Metrics, DashboardConfig, WSMessage } from "@/lib/types";
 
@@ -104,6 +105,9 @@ export default function DashboardPage() {
 
         {/* Chart */}
         <Chart bars={bars} signals={signals} labeling={labeling} />
+
+        {/* Equity curve simulation */}
+        <EquityCurve symbol={symbol} barType={barType} labeling={labeling} />
 
         {/* Signals table */}
         <SignalsTable signals={signals} />

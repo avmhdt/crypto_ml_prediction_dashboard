@@ -9,7 +9,7 @@ import pandas as pd
 
 
 # Discrete bet size levels
-DISCRETE_LEVELS = np.array([0.0, 0.25, 0.5, 0.75, 1.0])
+DISCRETE_LEVELS = np.arange(0.0, 1.1, 0.1).round(1)
 
 
 def bet_size_from_probability(meta_probabilities: np.ndarray,
@@ -60,7 +60,7 @@ def discretize_bet_size(sizes: np.ndarray,
     """Round continuous bet sizes to nearest discrete level.
 
     ML for Asset Managers (2020): Discretize for practical position management.
-    Default levels: {0, 0.25, 0.5, 0.75, 1.0}
+    Default levels: {0, 0.1, 0.2, ..., 1.0}
 
     Parameters
     ----------
@@ -114,7 +114,7 @@ def compute_bet_sizes(meta_probabilities: np.ndarray,
 
     Returns
     -------
-    sizes : array of discrete bet sizes in {0, 0.25, 0.5, 0.75, 1.0}
+    sizes : array of discrete bet sizes in {0, 0.1, 0.2, ..., 1.0}
     """
     # Step 1: Raw size from probability
     raw_sizes = bet_size_from_probability(meta_probabilities)

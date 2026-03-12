@@ -5,6 +5,7 @@ from pydantic import BaseModel
 
 from backend.config import BAR_TYPES, LABELING_METHODS, SYMBOLS, TripleBarrierConfig
 from backend.data.database import load_bars, load_signals
+from backend.simulation.equity import simulate_equity
 
 router = APIRouter(prefix="/api")
 
@@ -137,7 +138,9 @@ async def seed_signals(request: Request, symbol: str, bar_type: str = "time"):
         meta_prob = round(float(np.random.uniform(0.45, 0.95)), 4)
         if meta_prob < 0.5:
             continue
-        size = float(np.random.choice([0.25, 0.5, 0.75, 1.0], p=[0.15, 0.3, 0.35, 0.2]))
+        size = float(np.random.choice(
+            [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+            p=[0.05, 0.05, 0.1, 0.1, 0.15, 0.15, 0.15, 0.1, 0.1, 0.05]))
         sl = float(row["close"]) - side * vol * 2.0
         pt = float(row["close"]) + side * vol * 2.0
         tb = int(row["timestamp"]) + 50 * 60000
@@ -158,3 +161,58 @@ async def seed_signals(request: Request, symbol: str, bar_type: str = "time"):
 
     conn.execute("CHECKPOINT")
     return {"status": "seeded", "count": count}
+
+
+@router.get("/equity/{symbol}")
+async def get_equity(
+    request: Request,
+    symbol: str,
+    bar_type: str = Query(default="time"),
+    labeling: str = Query(default="triple_barrier"),
+    starting_capital: float = Query(default=10000.0, ge=100),
+    fees_bps: float = Query(default=10.0, ge=0),
+):
+    """Simulate theoretical equity curve from stored signals and bars."""
+    if symbol not in SYMBOLS:
+        raise HTTPException(status_code=404, detail=f"Symbol {symbol} not found")
+
+    conn = request.app.state.db
+    signals_df = load_signals(conn, symbol, bar_type=bar_type,
+                              labeling_method=labeling, limit=10000)
+
+    if signals_df.empty:
+        return {
+            "timestamps": [], "equity": [], "drawdown": [],
+            "total_invested": [],
+            "metrics": {
+                "sharpe": 0, "max_dd": 0, "total_return": 0,
+                "win_rate": 0, "num_trades": 0,
+            },
+        }
+
+    # Load only bars overlapping with signal time range
+    min_ts = int(signals_df["timestamp"].min())
+    max_tb = signals_df["time_barrier"].dropna()
+    end_ts = int(max_tb.max()) if not max_tb.empty else int(signals_df["timestamp"].max())
+    bars_df = load_bars(conn, symbol, bar_type, start_time=min_ts,
+                        end_time=end_ts, limit=10000)
+
+    if bars_df.empty:
+        return {
+            "timestamps": [], "equity": [], "drawdown": [],
+            "total_invested": [],
+            "metrics": {
+                "sharpe": 0, "max_dd": 0, "total_return": 0,
+                "win_rate": 0, "num_trades": 0,
+            },
+        }
+
+    result = simulate_equity(signals_df, bars_df, labeling,
+                             starting_capital, fees_bps)
+    return {
+        "timestamps": result.timestamps,
+        "equity": result.equity,
+        "drawdown": result.drawdown,
+        "total_invested": result.total_invested,
+        "metrics": result.metrics,
+    }
