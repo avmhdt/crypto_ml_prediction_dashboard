@@ -185,6 +185,12 @@ def _ensure_feed_running(symbol: str):
         )
 
 
+def start_all_feeds():
+    """Start live feeds for all configured symbols (called at app startup)."""
+    for symbol in SYMBOLS:
+        _ensure_feed_running(symbol)
+
+
 @router.websocket("/ws/{symbol}")
 async def websocket_endpoint(websocket: WebSocket, symbol: str):
     symbol = symbol.upper()

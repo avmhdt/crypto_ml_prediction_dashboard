@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.data.database import get_connection, init_schema
 from backend.api.routes import router as api_router
-from backend.api.websocket import router as ws_router
+from backend.api.websocket import router as ws_router, start_all_feeds
 
 
 @asynccontextmanager
@@ -14,6 +14,8 @@ async def lifespan(app: FastAPI):
     conn = get_connection()
     init_schema(conn)
     app.state.db = conn
+    # Start live feeds for all symbols immediately
+    start_all_feeds()
     yield
     conn.close()
 
