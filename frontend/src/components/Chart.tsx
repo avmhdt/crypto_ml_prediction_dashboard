@@ -14,7 +14,6 @@ import {
   type CandlestickData,
   type SeriesMarker,
   type Time,
-  type Logical,
   ColorType,
 } from "lightweight-charts";
 import type { BarData, Signal } from "@/lib/types";
@@ -142,24 +141,31 @@ export function Chart({ bars, signals, labeling }: ChartProps) {
       const updateVerticalPos = () => {
         if (!verticalBarrierRef.current) return;
 
-        // Use logical coordinates — timeToCoordinate returns 0 (not null)
-        // for timestamps it can't resolve, so it's unreliable.
-        // Logical index = (time - firstBarTime) / avgBarInterval
+        // Pure math approach — bypass all lightweight-charts coordinate APIs.
+        // Compute pixel position from visible logical range and time scale width.
         const meta = barMetaRef.current;
         if (meta.avgIntervalSec <= 0 || meta.count === 0) return;
 
+        const range = chart.timeScale().getVisibleLogicalRange();
+        if (!range) return;
+
+        const rangeFrom = Number(range.from);
+        const rangeTo = Number(range.to);
+        const rangeSpan = rangeTo - rangeFrom;
+        if (rangeSpan <= 0) return;
+
+        const contentWidth = chart.timeScale().width();
+        if (contentWidth <= 0) return;
+
+        // Logical index of the time barrier
         const tbLogical =
           (tbTimeSec - meta.firstTimeSec) / meta.avgIntervalSec;
-        const coord = chart
-          .timeScale()
-          .logicalToCoordinate(tbLogical as Logical);
 
-        if (
-          coord !== null &&
-          coord !== undefined &&
-          Number.isFinite(coord) &&
-          coord > 0
-        ) {
+        // Map logical index to pixel coordinate
+        const coord =
+          ((tbLogical - rangeFrom) / rangeSpan) * contentWidth;
+
+        if (Number.isFinite(coord) && coord >= 0 && coord <= contentWidth) {
           verticalBarrierRef.current.style.left = `${coord}px`;
           verticalBarrierRef.current.style.display = "block";
         } else {
