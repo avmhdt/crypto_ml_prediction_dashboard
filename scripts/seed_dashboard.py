@@ -141,6 +141,21 @@ def main():
 def _try_seed_signals(conn, bars_df, symbol, bar_type, barrier_config, bar_config):
     """Try to generate signals from trained models. Returns True if any succeeded."""
     from backend.config import MODELS_DIR, LABELING_METHODS
+    from backend.labeling.triple_barrier import _daily_volatility
+    import pandas as pd
+
+    # Compute volatility once for all labeling methods (invariant across loop)
+    rolling_vol = _daily_volatility(
+        pd.Series(bars_df["close"].values, dtype=np.float64),
+        span=barrier_config.volatility_window,
+    )
+    rolling_vol.index = bars_df.index  # align with bars_df index
+
+    # Horizon scaling: estimate vol over the holding period
+    ts_vals = bars_df["timestamp"].values
+    avg_bar_ms = float(np.median(np.diff(ts_vals))) if len(ts_vals) > 1 else 60000.0
+    horizon_ms = barrier_config.max_holding_period * 60000
+    horizon_bars = max(horizon_ms / avg_bar_ms, 1.0)
 
     any_succeeded = False
     for labeling in LABELING_METHODS:
@@ -164,6 +179,7 @@ def _try_seed_signals(conn, bars_df, symbol, bar_type, barrier_config, bar_confi
             valid = features.notna().all(axis=1)
             features = features[valid]
             valid_bars = bars_df.loc[features.index]
+            valid_vol = rolling_vol.loc[features.index].values
 
             if len(features) < 10:
                 continue
@@ -189,10 +205,12 @@ def _try_seed_signals(conn, bars_df, symbol, bar_type, barrier_config, bar_confi
                     continue
                 row = valid_bars.iloc[i]
                 price = float(row["close"])
-                vol = float(row["high"] - row["low"])
                 side = int(preds[i])
-                sl_price = price - side * vol * barrier_config.sl_multiplier
-                pt_price = price + side * vol * barrier_config.pt_multiplier
+                # Horizon-scaled volatility: per-bar vol * sqrt(horizon_bars)
+                per_bar_vol = float(valid_vol[i])
+                horizon_vol = per_bar_vol * np.sqrt(horizon_bars)
+                sl_price = price * (1 - side * barrier_config.sl_multiplier * horizon_vol)
+                pt_price = price * (1 + side * barrier_config.pt_multiplier * horizon_vol)
                 try:
                     conn.execute(
                         """INSERT INTO signals (symbol, bar_type, labeling_method,
@@ -220,24 +238,41 @@ def _try_seed_signals(conn, bars_df, symbol, bar_type, barrier_config, bar_confi
 def _seed_synthetic_signals(conn, bars_df, symbol, bar_type):
     """Generate synthetic signals for dashboard display when ML models fail."""
     from backend.config import LABELING_METHODS
+    from backend.labeling.triple_barrier import _daily_volatility
+    import pandas as pd
+
+    barrier_config = TripleBarrierConfig()
 
     np.random.seed(42 + hash(bar_type) % 1000)
     total = 0
 
-    for _, row in bars_df.iterrows():
+    # Reuse the same EWMA volatility as triple_barrier.py
+    rolling_vol = _daily_volatility(
+        pd.Series(bars_df["close"].values, dtype=np.float64),
+        span=barrier_config.volatility_window,
+    )
+    rolling_vol.index = bars_df.index
+
+    # Horizon scaling: estimate vol over the holding period
+    ts_vals = bars_df["timestamp"].values
+    avg_bar_ms = float(np.median(np.diff(ts_vals))) if len(ts_vals) > 1 else 60000.0
+    horizon_ms = barrier_config.max_holding_period * 60000
+    horizon_bars = max(horizon_ms / avg_bar_ms, 1.0)
+
+    for idx, row in bars_df.iterrows():
         if np.random.random() > 0.12:
             continue
         side = int(np.random.choice([-1, 1]))
-        vol = float(row["high"] - row["low"])
-        if vol <= 0:
-            continue
         meta_prob = round(float(np.random.uniform(0.45, 0.95)), 4)
         size = float(np.random.choice([0.25, 0.5, 0.75, 1.0],
                                        p=[0.15, 0.3, 0.35, 0.2]))
         price = float(row["close"])
-        sl = price - side * vol * 2.0
-        pt = price + side * vol * 2.0
-        tb = int(row["timestamp"]) + 50 * 60000
+        # Horizon-scaled volatility: per-bar vol * sqrt(horizon_bars)
+        per_bar_vol = float(rolling_vol.at[idx])
+        horizon_vol = per_bar_vol * np.sqrt(horizon_bars)
+        sl = price * (1 - side * barrier_config.sl_multiplier * horizon_vol)
+        pt = price * (1 + side * barrier_config.pt_multiplier * horizon_vol)
+        tb = int(row["timestamp"]) + horizon_ms
 
         for labeling in LABELING_METHODS:
             try:
