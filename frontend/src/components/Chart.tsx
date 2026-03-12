@@ -274,8 +274,15 @@ export function Chart({ bars, signals, labeling }: ChartProps) {
 
   // Update candlestick and volume data
   useEffect(() => {
-    if (!candlestickRef.current || !volumeRef.current || sortedBars.length === 0)
+    if (!candlestickRef.current || !volumeRef.current) return;
+
+    if (sortedBars.length === 0) {
+      // Clear chart when switching to a symbol/bar_type with no data
+      candlestickRef.current.setData([]);
+      volumeRef.current.setData([]);
+      clearBarriers();
       return;
+    }
 
     const candleData: CandlestickData<Time>[] = sortedBars.map((bar) => ({
       time: (bar.timestamp / 1000) as Time,
@@ -293,11 +300,16 @@ export function Chart({ bars, signals, labeling }: ChartProps) {
 
     candlestickRef.current.setData(candleData);
     volumeRef.current.setData(volumeData);
-  }, [sortedBars]);
+  }, [sortedBars, clearBarriers]);
 
   // Update signal markers
   useEffect(() => {
-    if (!markersPluginRef.current || sortedBars.length === 0) return;
+    if (!markersPluginRef.current) return;
+
+    if (sortedBars.length === 0) {
+      markersPluginRef.current.setMarkers([]);
+      return;
+    }
 
     const firstTimestamp = sortedBars[0]?.timestamp ?? 0;
 

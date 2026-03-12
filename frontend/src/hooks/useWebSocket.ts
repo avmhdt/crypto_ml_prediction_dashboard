@@ -18,6 +18,11 @@ export function useWebSocket({
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
+  // Store onMessage in a ref so the WebSocket doesn't reconnect when
+  // the callback changes (e.g., when barType or labeling filters change).
+  const onMessageRef = useRef(onMessage);
+  onMessageRef.current = onMessage;
+
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
@@ -37,7 +42,7 @@ export function useWebSocket({
     ws.onmessage = (event) => {
       try {
         const msg: WSMessage = JSON.parse(event.data);
-        onMessage?.(msg);
+        onMessageRef.current?.(msg);
       } catch {
         // ignore malformed messages
       }
@@ -52,7 +57,7 @@ export function useWebSocket({
     ws.onerror = () => {
       ws.close();
     };
-  }, [symbol, onMessage, reconnectInterval]);
+  }, [symbol, reconnectInterval]);
 
   useEffect(() => {
     connect();
