@@ -14,7 +14,6 @@ import {
   type CandlestickData,
   type SeriesMarker,
   type Time,
-  type Logical,
   ColorType,
 } from "lightweight-charts";
 import type { BarData, Signal } from "@/lib/types";
@@ -142,20 +141,31 @@ export function Chart({ bars, signals, labeling }: ChartProps) {
       const updateVerticalPos = () => {
         if (!verticalBarrierRef.current) return;
 
-        // Try direct coordinate first (works when time_barrier is within data range)
-        let coord = chart.timeScale().timeToCoordinate(tbTimeSec as Time);
+        // Pure math approach — bypass all lightweight-charts coordinate APIs.
+        // Compute pixel position from visible logical range and time scale width.
+        const meta = barMetaRef.current;
+        if (meta.avgIntervalSec <= 0 || meta.count === 0) return;
 
-        // If null, extrapolate using logical coordinates
-        if (coord === null || coord === undefined) {
-          const meta = barMetaRef.current;
-          // Compute logical index from first bar — works for any timestamp
-          // whether within or beyond the data range
-          const tbLogical =
-            (tbTimeSec - meta.firstTimeSec) / meta.avgIntervalSec;
-          coord = chart.timeScale().logicalToCoordinate(tbLogical as Logical);
-        }
+        const range = chart.timeScale().getVisibleLogicalRange();
+        if (!range) return;
 
-        if (coord !== null && coord !== undefined) {
+        const rangeFrom = Number(range.from);
+        const rangeTo = Number(range.to);
+        const rangeSpan = rangeTo - rangeFrom;
+        if (rangeSpan <= 0) return;
+
+        const contentWidth = chart.timeScale().width();
+        if (contentWidth <= 0) return;
+
+        // Logical index of the time barrier
+        const tbLogical =
+          (tbTimeSec - meta.firstTimeSec) / meta.avgIntervalSec;
+
+        // Map logical index to pixel coordinate
+        const coord =
+          ((tbLogical - rangeFrom) / rangeSpan) * contentWidth;
+
+        if (Number.isFinite(coord) && coord >= 0 && coord <= contentWidth) {
           verticalBarrierRef.current.style.left = `${coord}px`;
           verticalBarrierRef.current.style.display = "block";
         } else {
