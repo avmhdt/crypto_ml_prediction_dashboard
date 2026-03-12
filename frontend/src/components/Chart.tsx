@@ -48,14 +48,14 @@ export function Chart({ bars, signals, labeling }: ChartProps) {
   // without needing `bars` in their dependency arrays
   const barMetaRef = useRef({
     count: 0,
-    lastTimeSec: 0,
+    firstTimeSec: 0,
     avgIntervalSec: 60,
   });
   useMemo(() => {
     const n = sortedBars.length;
     barMetaRef.current = {
       count: n,
-      lastTimeSec: n > 0 ? sortedBars[n - 1].timestamp / 1000 : 0,
+      firstTimeSec: n > 0 ? sortedBars[0].timestamp / 1000 : 0,
       avgIntervalSec:
         n > 1
           ? (sortedBars[n - 1].timestamp - sortedBars[0].timestamp) /
@@ -145,13 +145,13 @@ export function Chart({ bars, signals, labeling }: ChartProps) {
         // Try direct coordinate first (works when time_barrier is within data range)
         let coord = chart.timeScale().timeToCoordinate(tbTimeSec as Time);
 
-        // If null, extrapolate using logical coordinates (works beyond last bar)
+        // If null, extrapolate using logical coordinates
         if (coord === null || coord === undefined) {
           const meta = barMetaRef.current;
-          const lastLogical = meta.count - 1;
-          const barsAhead =
-            (tbTimeSec - meta.lastTimeSec) / meta.avgIntervalSec;
-          const tbLogical = lastLogical + barsAhead;
+          // Compute logical index from first bar — works for any timestamp
+          // whether within or beyond the data range
+          const tbLogical =
+            (tbTimeSec - meta.firstTimeSec) / meta.avgIntervalSec;
           coord = chart.timeScale().logicalToCoordinate(tbLogical as Logical);
         }
 
