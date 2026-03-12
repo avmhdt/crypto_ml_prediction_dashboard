@@ -176,6 +176,8 @@ def _try_seed_signals(conn, bars_df, symbol, bar_type, barrier_config, bar_confi
 
             signal_count = 0
             for i in range(len(preds)):
+                if meta_probs[i] < 0.5:
+                    continue
                 if bet_sizes[i] < 0.25:
                     continue
                 row = valid_bars.iloc[i]

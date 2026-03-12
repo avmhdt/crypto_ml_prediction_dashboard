@@ -187,17 +187,42 @@ def train_pipeline(
     logger.info(f"Primary model recall (train): {primary_recall:.4f}")
 
     # Step 6: Train meta-labeling model (optimize Precision)
-    logger.info("Training meta-labeling model (Precision-optimized)...")
-    meta_model = MetaLabelingModel()
-    meta_model.fit(features, primary_preds, labels, sample_weight=weights)
+    # Use out-of-sample primary predictions (AFML Ch.3) so the meta model
+    # sees realistic primary errors instead of overfitting to in-sample accuracy.
+    logger.info("Training meta-labeling model (Precision-optimized, OOS)...")
 
-    meta_probs = meta_model.predict_proba(features, primary_preds)
-    meta_preds = meta_model.predict(features, primary_preds)
+    label_ends = np.minimum(
+        np.arange(len(labels)) + training_config.n_splits,
+        len(labels) - 1,
+    )
+    oos_cv = PurgedKFoldCV(
+        n_splits=training_config.n_splits,
+        label_ends=label_ends,
+        embargo_pct=training_config.embargo_pct,
+    )
+    oos_preds = np.zeros(len(labels), dtype=int)
+    for train_idx, test_idx in oos_cv.split(features):
+        fold_model = PrimaryModel(params={**primary.params})
+        fold_model.fit(
+            features.iloc[train_idx], labels[train_idx],
+            sample_weight=weights[train_idx],
+        )
+        oos_preds[test_idx] = fold_model.predict(features.iloc[test_idx])
+
+    oos_accuracy = float((oos_preds == labels).mean())
+    logger.info(f"Primary OOS accuracy: {oos_accuracy:.4f} "
+                f"(in-sample recall: {primary_recall:.4f})")
+
+    meta_model = MetaLabelingModel()
+    meta_model.fit(features, oos_preds, labels, sample_weight=weights)
+
+    meta_probs = meta_model.predict_proba(features, oos_preds)
+    meta_preds = meta_model.predict(features, oos_preds)
     meta_precision = precision_score(
-        MetaLabelingModel.construct_meta_labels(primary_preds, labels),
+        MetaLabelingModel.construct_meta_labels(oos_preds, labels),
         meta_preds, zero_division=0,
     )
-    logger.info(f"Meta-labeling precision (train): {meta_precision:.4f}")
+    logger.info(f"Meta-labeling precision (OOS): {meta_precision:.4f}")
 
     # Step 7: Compute bet sizes
     bet_sizes = compute_bet_sizes(meta_probs)
