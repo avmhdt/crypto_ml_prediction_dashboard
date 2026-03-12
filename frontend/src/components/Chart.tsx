@@ -33,9 +33,11 @@ export function Chart({ bars, signals, labeling }: ChartProps) {
   const volumeRef = useRef<ISeriesApi<any> | null>(null);
   const markersPluginRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
   const barrierLinesRef = useRef<IPriceLine[]>([]);
+  const verticalBarrierRef = useRef<HTMLDivElement | null>(null);
+  const rangeHandlerRef = useRef<(() => void) | null>(null);
   const [selectedSignal, setSelectedSignal] = useState<Signal | null>(null);
 
-  // Clear barrier price lines
+  // Clear barrier price lines and vertical time barrier
   const clearBarriers = useCallback(() => {
     if (candlestickRef.current) {
       for (const line of barrierLinesRef.current) {
@@ -43,6 +45,15 @@ export function Chart({ bars, signals, labeling }: ChartProps) {
       }
     }
     barrierLinesRef.current = [];
+    if (verticalBarrierRef.current) {
+      verticalBarrierRef.current.style.display = "none";
+    }
+    if (rangeHandlerRef.current && chartRef.current) {
+      chartRef.current
+        .timeScale()
+        .unsubscribeVisibleLogicalRangeChange(rangeHandlerRef.current);
+      rangeHandlerRef.current = null;
+    }
     setSelectedSignal(null);
   }, []);
 
@@ -95,6 +106,31 @@ export function Chart({ bars, signals, labeling }: ChartProps) {
     }
 
     barrierLinesRef.current = lines;
+
+    // Draw vertical time barrier
+    if (signal.time_barrier != null && chartRef.current) {
+      const tbTime = (signal.time_barrier / 1000) as Time;
+
+      const updateVerticalPos = () => {
+        const coord = chartRef.current?.timeScale().timeToCoordinate(tbTime);
+        if (
+          coord !== null &&
+          coord !== undefined &&
+          verticalBarrierRef.current
+        ) {
+          verticalBarrierRef.current.style.left = `${coord}px`;
+          verticalBarrierRef.current.style.display = "block";
+        } else if (verticalBarrierRef.current) {
+          verticalBarrierRef.current.style.display = "none";
+        }
+      };
+
+      updateVerticalPos();
+      chartRef.current
+        .timeScale()
+        .subscribeVisibleLogicalRangeChange(updateVerticalPos);
+      rangeHandlerRef.current = updateVerticalPos;
+    }
   }, [clearBarriers]);
 
   // Initialize chart
@@ -341,7 +377,38 @@ export function Chart({ bars, signals, labeling }: ChartProps) {
           </span>
         </div>
       </div>
-      <div ref={containerRef} className="w-full" />
+      <div style={{ position: "relative" }}>
+        <div ref={containerRef} className="w-full" />
+        <div
+          ref={verticalBarrierRef}
+          style={{
+            position: "absolute",
+            top: 0,
+            height: "100%",
+            width: 0,
+            borderLeft: "1px dashed #f59e0b",
+            display: "none",
+            pointerEvents: "none",
+            zIndex: 10,
+          }}
+        >
+          <span
+            style={{
+              position: "absolute",
+              top: 4,
+              left: 4,
+              fontSize: "10px",
+              color: "#f59e0b",
+              whiteSpace: "nowrap",
+              background: "#0a0a0f",
+              padding: "1px 4px",
+              borderRadius: "2px",
+            }}
+          >
+            Time Barrier
+          </span>
+        </div>
+      </div>
     </div>
   );
 }
