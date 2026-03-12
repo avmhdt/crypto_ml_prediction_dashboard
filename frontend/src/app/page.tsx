@@ -39,32 +39,41 @@ export default function DashboardPage() {
 
   // Fetch bars when selection changes
   useEffect(() => {
-    fetch(`/api/bars/${symbol}/${barType}?limit=5000`)
+    const controller = new AbortController();
+    setBars([]);
+    fetch(`/api/bars/${symbol}/${barType}?limit=5000`, { signal: controller.signal })
       .then((r) => r.json())
       .then((data) => setBars(Array.isArray(data) ? data : []))
-      .catch(() => setBars([]));
+      .catch((e) => { if (e.name !== "AbortError") setBars([]); });
+    return () => controller.abort();
   }, [symbol, barType]);
 
   // Fetch signals when selection changes
   useEffect(() => {
-    fetch(`/api/signals/${symbol}?bar_type=${barType}&labeling=${labeling}&limit=1000`)
+    const controller = new AbortController();
+    setSignals([]);
+    fetch(`/api/signals/${symbol}?bar_type=${barType}&labeling=${labeling}&limit=1000`, { signal: controller.signal })
       .then((r) => r.json())
       .then((data) => setSignals(Array.isArray(data) ? data : []))
-      .catch(() => setSignals([]));
+      .catch((e) => { if (e.name !== "AbortError") setSignals([]); });
+    return () => controller.abort();
   }, [symbol, barType, labeling]);
 
   // Fetch metrics when selection changes
   useEffect(() => {
-    fetch(`/api/metrics/${symbol}?bar_type=${barType}&labeling=${labeling}`)
+    const controller = new AbortController();
+    setMetrics(null);
+    fetch(`/api/metrics/${symbol}?bar_type=${barType}&labeling=${labeling}`, { signal: controller.signal })
       .then((r) => r.json())
       .then(setMetrics)
-      .catch(() => setMetrics(null));
+      .catch((e) => { if (e.name !== "AbortError") setMetrics(null); });
+    return () => controller.abort();
   }, [symbol, barType, labeling]);
 
   // Handle WebSocket messages
   const onMessage = useCallback(
     (msg: WSMessage) => {
-      if (msg.type === "bar" && msg.data.bar_type === barType) {
+      if (msg.type === "bar" && msg.data.symbol === symbol && msg.data.bar_type === barType) {
         setBars((prev) => {
           const updated = [...prev, msg.data as BarData];
           return updated.slice(-500);
@@ -72,12 +81,12 @@ export default function DashboardPage() {
       }
       if (msg.type === "signal") {
         const signal = msg.data as Signal;
-        if (signal.bar_type === barType && signal.labeling_method === labeling) {
+        if (signal.symbol === symbol && signal.bar_type === barType && signal.labeling_method === labeling) {
           setSignals((prev) => [signal, ...prev].slice(0, 100));
         }
       }
     },
-    [barType, labeling],
+    [symbol, barType, labeling],
   );
 
   const { connected } = useWebSocket({
