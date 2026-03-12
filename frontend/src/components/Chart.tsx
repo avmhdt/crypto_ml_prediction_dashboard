@@ -142,20 +142,24 @@ export function Chart({ bars, signals, labeling }: ChartProps) {
       const updateVerticalPos = () => {
         if (!verticalBarrierRef.current) return;
 
-        // Try direct coordinate first (works when time_barrier is within data range)
-        let coord = chart.timeScale().timeToCoordinate(tbTimeSec as Time);
+        // Use logical coordinates — timeToCoordinate returns 0 (not null)
+        // for timestamps it can't resolve, so it's unreliable.
+        // Logical index = (time - firstBarTime) / avgBarInterval
+        const meta = barMetaRef.current;
+        if (meta.avgIntervalSec <= 0 || meta.count === 0) return;
 
-        // If null, extrapolate using logical coordinates
-        if (coord === null || coord === undefined) {
-          const meta = barMetaRef.current;
-          // Compute logical index from first bar — works for any timestamp
-          // whether within or beyond the data range
-          const tbLogical =
-            (tbTimeSec - meta.firstTimeSec) / meta.avgIntervalSec;
-          coord = chart.timeScale().logicalToCoordinate(tbLogical as Logical);
-        }
+        const tbLogical =
+          (tbTimeSec - meta.firstTimeSec) / meta.avgIntervalSec;
+        const coord = chart
+          .timeScale()
+          .logicalToCoordinate(tbLogical as Logical);
 
-        if (coord !== null && coord !== undefined) {
+        if (
+          coord !== null &&
+          coord !== undefined &&
+          Number.isFinite(coord) &&
+          coord > 0
+        ) {
           verticalBarrierRef.current.style.left = `${coord}px`;
           verticalBarrierRef.current.style.display = "block";
         } else {
