@@ -42,3 +42,15 @@ class TrainingConfig(BaseModel):
     ffd_max_d: float = 1.0
     ffd_adf_pvalue: float = 0.05
     feature_window: int = 20
+
+
+# Default simulation settings (used by /api/equity and /api/config/simulation)
+SIMULATION_DEFAULTS = {
+    "mode": "simple",
+    "starting_capital": 10000.0,
+    "fees_bps": 10.0,
+    "vip_tier": 0,
+    "bnb_discount": False,
+    "urgency": 0.5,
+    "order_timeout_ms": 60000,
+}

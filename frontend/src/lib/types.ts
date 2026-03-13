@@ -48,10 +48,22 @@ export interface Metrics {
   avg_bet_size: number;
 }
 
+export interface BBO {
+  symbol: string;
+  bid: number;
+  bid_qty: number;
+  ask: number;
+  ask_qty: number;
+  spread: number;
+  mid: number;
+  time: number;
+}
+
 export type WSMessage =
   | { type: "bar"; data: BarData }
   | { type: "signal"; data: Signal }
-  | { type: "tick"; data: Tick };
+  | { type: "tick"; data: Tick }
+  | { type: "bbo"; data: BBO };
 
 export interface EquityMetrics {
   sharpe: number;
@@ -67,4 +79,38 @@ export interface EquityData {
   drawdown: number[];
   total_invested: number[];
   metrics: EquityMetrics;
+}
+
+export interface SimulationConfig {
+  mode: "simple" | "realistic" | "both";
+  starting_capital: number;
+  fees_bps: number;
+  vip_tier: number;
+  bnb_discount: boolean;
+  urgency: number;
+  order_timeout_ms: number;
+}
+
+export interface CostBreakdown {
+  exchange_fee: number;
+  funding_cost: number;
+  spread_cost: number;
+  slippage: number;
+  market_impact: number;
+  total: number;
+}
+
+export interface RealisticMetrics extends EquityMetrics {
+  fill_rate: number;
+  avg_slippage_bps: number;
+  maker_ratio: number;
+  avg_queue_wait_ms: number;
+  funding_total: number;
+  num_unfilled: number;
+  cost_breakdown: CostBreakdown;
+}
+
+export interface EquityComparisonData {
+  simple: EquityData;
+  realistic: EquityData & { metrics: RealisticMetrics };
 }

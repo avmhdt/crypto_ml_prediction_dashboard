@@ -75,6 +75,53 @@ def init_schema(conn: duckdb.DuckDBPyConnection) -> None:
         )
     """)
 
+    # Simulated fills from realistic order fill simulation (30d rolling)
+    conn.execute("CREATE SEQUENCE IF NOT EXISTS sim_fill_id_seq START 1")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS sim_fills (
+            id INTEGER PRIMARY KEY DEFAULT(nextval('sim_fill_id_seq')),
+            symbol VARCHAR,
+            signal_id INTEGER,
+            side INTEGER,
+            fill_price DOUBLE,
+            fill_qty DOUBLE,
+            fill_time BIGINT,
+            order_type VARCHAR,
+            limit_price DOUBLE,
+            submitted_time BIGINT,
+            queue_wait_ms BIGINT,
+            exchange_fee DOUBLE,
+            funding_cost DOUBLE,
+            spread_cost DOUBLE,
+            slippage DOUBLE,
+            market_impact DOUBLE,
+            total_cost DOUBLE,
+            meta_probability DOUBLE
+        )
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_sim_fills_symbol_time
+        ON sim_fills (symbol, fill_time)
+    """)
+
+    # BBO (best bid/offer) snapshots for spread calibration (24h rolling)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS bbo_log (
+            symbol VARCHAR,
+            time BIGINT,
+            bid DOUBLE,
+            bid_qty DOUBLE,
+            ask DOUBLE,
+            ask_qty DOUBLE,
+            spread DOUBLE,
+            mid DOUBLE
+        )
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_bbo_log_symbol_time
+        ON bbo_log (symbol, time)
+    """)
+
 
 def prune_old_data(conn: duckdb.DuckDBPyConnection, now_ms: int) -> None:
     """Remove data older than retention windows."""
@@ -96,6 +143,16 @@ def prune_old_data(conn: duckdb.DuckDBPyConnection, now_ms: int) -> None:
         "DELETE FROM signals WHERE timestamp < ?",
         [now_ms - 30 * ms_per_day]
     )
+    # Simulated fills: 30d
+    conn.execute(
+        "DELETE FROM sim_fills WHERE fill_time < ?",
+        [now_ms - 30 * ms_per_day]
+    )
+    # BBO log: 24h
+    conn.execute(
+        "DELETE FROM bbo_log WHERE time < ?",
+        [now_ms - 24 * ms_per_hour]
+    )
 
 
 def insert_ticks_batch(conn: duckdb.DuckDBPyConnection,
@@ -110,6 +167,33 @@ def insert_ticks_batch(conn: duckdb.DuckDBPyConnection,
           t["time"], t["is_buyer_maker"]) for t in ticks]
     )
     return len(ticks)
+
+
+def insert_sim_fill(conn: duckdb.DuckDBPyConnection, fill: dict) -> None:
+    """Insert a simulated fill record."""
+    conn.execute(
+        """INSERT INTO sim_fills (symbol, signal_id, side, fill_price, fill_qty,
+           fill_time, order_type, limit_price, submitted_time, queue_wait_ms,
+           exchange_fee, funding_cost, spread_cost, slippage, market_impact,
+           total_cost, meta_probability)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        [fill["symbol"], fill.get("signal_id"), fill["side"], fill["fill_price"],
+         fill["fill_qty"], fill["fill_time"], fill["order_type"],
+         fill["limit_price"], fill["submitted_time"], fill["queue_wait_ms"],
+         fill["exchange_fee"], fill["funding_cost"], fill["spread_cost"],
+         fill["slippage"], fill["market_impact"], fill["total_cost"],
+         fill.get("meta_probability", 0.0)]
+    )
+
+
+def insert_bbo(conn: duckdb.DuckDBPyConnection, bbo: dict) -> None:
+    """Insert a BBO snapshot."""
+    conn.execute(
+        """INSERT INTO bbo_log (symbol, time, bid, bid_qty, ask, ask_qty, spread, mid)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        [bbo["symbol"], bbo["time"], bbo["bid"], bbo["bid_qty"],
+         bbo["ask"], bbo["ask_qty"], bbo["spread"], bbo["mid"]]
+    )
 
 
 def load_bars(conn: duckdb.DuckDBPyConnection, symbol: str, bar_type: str,

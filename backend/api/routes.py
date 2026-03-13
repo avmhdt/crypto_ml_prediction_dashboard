@@ -5,7 +5,8 @@ from pydantic import BaseModel
 
 from backend.config import BAR_TYPES, LABELING_METHODS, SYMBOLS, TripleBarrierConfig
 from backend.data.database import load_bars, load_signals
-from backend.simulation.equity import simulate_equity
+from backend.simulation.equity import simulate_equity, SimulationResult
+from backend.simulation.config import SimulationConfig, VIP_FEE_TABLE
 
 router = APIRouter(prefix="/api")
 
@@ -163,6 +164,37 @@ async def seed_signals(request: Request, symbol: str, bar_type: str = "time"):
     return {"status": "seeded", "count": count}
 
 
+@router.get("/config/simulation")
+async def get_simulation_config():
+    """Return simulation configuration including VIP fee tiers."""
+    tiers = [
+        {"tier": t, "maker_bps": m, "taker_bps": k}
+        for t, (m, k) in sorted(VIP_FEE_TABLE.items())
+    ]
+    return {
+        "vip_tiers": tiers,
+        "defaults": {
+            "mode": "simple",
+            "starting_capital": 10000,
+            "fees_bps": 10,
+            "vip_tier": 0,
+            "urgency": 0.5,
+            "order_timeout_ms": 60000,
+        },
+    }
+
+
+def _result_to_dict(result: SimulationResult) -> dict:
+    """Convert SimulationResult to JSON-serializable dict."""
+    return {
+        "timestamps": result.timestamps,
+        "equity": result.equity,
+        "drawdown": result.drawdown,
+        "total_invested": result.total_invested,
+        "metrics": result.metrics,
+    }
+
+
 @router.get("/equity/{symbol}")
 async def get_equity(
     request: Request,
@@ -171,24 +203,41 @@ async def get_equity(
     labeling: str = Query(default="triple_barrier"),
     starting_capital: float = Query(default=10000.0, ge=100),
     fees_bps: float = Query(default=10.0, ge=0),
+    simulation_mode: str = Query(default="simple"),
+    vip_tier: int = Query(default=0, ge=0, le=9),
+    bnb_discount: bool = Query(default=False),
+    urgency: float = Query(default=0.5, ge=0.0, le=1.0),
+    order_timeout_ms: int = Query(default=60000, ge=1000),
 ):
-    """Simulate theoretical equity curve from stored signals and bars."""
+    """Simulate equity curve from stored signals and bars.
+
+    Supports three modes via ``simulation_mode``:
+    - ``simple``: Flat bps fee (original behaviour)
+    - ``realistic``: Decomposed 5-component cost model
+    - ``both``: Returns both curves for side-by-side comparison
+    """
     if symbol not in SYMBOLS:
         raise HTTPException(status_code=404, detail=f"Symbol {symbol} not found")
+    if simulation_mode not in ("simple", "realistic", "both"):
+        raise HTTPException(status_code=400, detail=f"Invalid simulation_mode: {simulation_mode}")
 
     conn = request.app.state.db
     signals_df = load_signals(conn, symbol, bar_type=bar_type,
                               labeling_method=labeling, limit=10000)
 
+    empty_result = {
+        "timestamps": [], "equity": [], "drawdown": [],
+        "total_invested": [],
+        "metrics": {
+            "sharpe": 0, "max_dd": 0, "total_return": 0,
+            "win_rate": 0, "num_trades": 0,
+        },
+    }
+
     if signals_df.empty:
-        return {
-            "timestamps": [], "equity": [], "drawdown": [],
-            "total_invested": [],
-            "metrics": {
-                "sharpe": 0, "max_dd": 0, "total_return": 0,
-                "win_rate": 0, "num_trades": 0,
-            },
-        }
+        if simulation_mode == "both":
+            return {"simple": empty_result, "realistic": empty_result}
+        return empty_result
 
     # Load only bars overlapping with signal time range
     min_ts = int(signals_df["timestamp"].min())
@@ -198,21 +247,32 @@ async def get_equity(
                         end_time=end_ts, limit=10000)
 
     if bars_df.empty:
+        if simulation_mode == "both":
+            return {"simple": empty_result, "realistic": empty_result}
+        return empty_result
+
+    # Build SimulationConfig for realistic mode
+    sim_config = SimulationConfig(
+        mode=simulation_mode,
+        starting_capital=starting_capital,
+        fees_bps=fees_bps,
+        vip_tier=vip_tier,
+        bnb_discount=bnb_discount,
+        order_timeout_ms=order_timeout_ms,
+        urgency=urgency,
+    )
+
+    result = simulate_equity(
+        signals_df, bars_df, labeling,
+        starting_capital, fees_bps,
+        simulation_mode=simulation_mode,
+        sim_config=sim_config,
+    )
+
+    if simulation_mode == "both":
         return {
-            "timestamps": [], "equity": [], "drawdown": [],
-            "total_invested": [],
-            "metrics": {
-                "sharpe": 0, "max_dd": 0, "total_return": 0,
-                "win_rate": 0, "num_trades": 0,
-            },
+            "simple": _result_to_dict(result["simple"]),
+            "realistic": _result_to_dict(result["realistic"]),
         }
 
-    result = simulate_equity(signals_df, bars_df, labeling,
-                             starting_capital, fees_bps)
-    return {
-        "timestamps": result.timestamps,
-        "equity": result.equity,
-        "drawdown": result.drawdown,
-        "total_invested": result.total_invested,
-        "metrics": result.metrics,
-    }
+    return _result_to_dict(result)

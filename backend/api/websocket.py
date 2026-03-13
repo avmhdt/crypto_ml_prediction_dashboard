@@ -10,10 +10,12 @@ import time
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from backend.config import SYMBOLS
 from backend.data.database import (
-    get_connection, insert_ticks_batch, prune_old_data,
+    get_connection, insert_ticks_batch, insert_bbo, prune_old_data,
 )
 from backend.data.live_feed import BinanceLiveFeed
 from backend.pipeline import LivePipeline
+from backend.simulation.fill_simulator import OrderFillSimulator
+from backend.simulation.config import SimulationConfig
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -52,10 +54,11 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-# Track active live feeds and pipelines per symbol
+# Track active live feeds, pipelines, and fill simulators per symbol
 _active_feeds: dict[str, BinanceLiveFeed] = {}
 _feed_tasks: dict[str, asyncio.Task] = {}
 _pipelines: dict[str, LivePipeline] = {}
+_fill_simulators: dict[str, OrderFillSimulator] = {}
 
 # Shared DuckDB connection for all feed writers (avoids lock contention)
 _shared_conn = None
@@ -79,6 +82,14 @@ def _get_pipeline(symbol: str) -> LivePipeline:
     return _pipelines[symbol]
 
 
+def _get_fill_simulator(symbol: str) -> OrderFillSimulator:
+    """Get or create fill simulator for a symbol."""
+    if symbol not in _fill_simulators:
+        config = SimulationConfig(mode="realistic")
+        _fill_simulators[symbol] = OrderFillSimulator(symbol, config)
+    return _fill_simulators[symbol]
+
+
 async def _run_live_feed(symbol: str):
     """Run live feed for a symbol, processing ticks through the full pipeline.
 
@@ -99,6 +110,8 @@ async def _run_live_feed(symbol: str):
         last_prune = time.time()
         batch_count = 0
 
+        fill_sim = _get_fill_simulator(symbol)
+
         async def on_batch():
             nonlocal last_prune, batch_count
             ticks = await feed.flush_buffer()
@@ -113,6 +126,16 @@ async def _run_live_feed(symbol: str):
                 # Process ticks through pipeline (bars + inference)
                 events = pipeline.process_ticks_batch(ticks)
 
+                # Feed ticks to fill simulator for queue advancement
+                for tick in ticks:
+                    try:
+                        fill_sim.on_tick(
+                            tick["price"], tick["qty"],
+                            tick["time"], tick["is_buyer_maker"],
+                        )
+                    except Exception:
+                        pass  # fill sim errors don't block pipeline
+
                 # Log periodic status
                 if batch_count % 30 == 0:
                     logger.info(f"[{symbol}] batch #{batch_count}: {len(ticks)} ticks, {len(events)} events")
@@ -124,6 +147,11 @@ async def _run_live_feed(symbol: str):
                         logger.info(f"New {event['data']['bar_type']} bar for {symbol}: close={event['data']['close']}")
                     elif event["type"] == "signal":
                         _insert_signal(conn, event["data"])
+                        # Submit signal to fill simulator
+                        try:
+                            fill_sim.submit_order(event["data"])
+                        except Exception:
+                            pass
                     await manager.broadcast(symbol, event)
 
                 # Also broadcast latest tick for real-time price display
@@ -136,6 +164,23 @@ async def _run_live_feed(symbol: str):
                         "time": latest["time"],
                         "is_buyer_maker": latest["is_buyer_maker"],
                     },
+                })
+
+            # Process BBO updates
+            bbos = await feed.flush_bbo_buffer()
+            for bbo in bbos:
+                try:
+                    fill_sim.on_bbo(
+                        bbo["bid"], bbo["bid_qty"],
+                        bbo["ask"], bbo["ask_qty"],
+                        bbo["time"],
+                    )
+                    insert_bbo(conn, bbo)
+                except Exception:
+                    pass
+                await manager.broadcast(symbol, {
+                    "type": "bbo",
+                    "data": bbo,
                 })
 
             # Prune old data every 5 minutes
