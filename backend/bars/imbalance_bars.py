@@ -41,10 +41,13 @@ class _ImbalanceBarBase(EWMABarGenerator):
         # Last non-zero tick direction to carry forward on zero-change ticks.
         self._prev_b: float = 1.0
         # EWMA of |imbalance| / T across completed bars.
-        self._expected_imbalance: float = 1.0
+        # Starts at None — calibrated from the first (warmup) bar.
+        self._expected_imbalance: float | None = None
         # Tick counter within the current bar (mirrors _acc.tick_count but
         # maintained separately so it's always available before _acc.update).
         self._tick_idx: int = 0
+        # Number of completed bars (for warmup detection)
+        self._bars_completed: int = 0
 
     # ------------------------------------------------------------------
     # Subclass hook
@@ -77,15 +80,21 @@ class _ImbalanceBarBase(EWMABarGenerator):
     # EWMA helpers for imbalance estimation
     # ------------------------------------------------------------------
     def _update_expected_imbalance(self, abs_norm_imbalance: float) -> None:
-        """Update the EWMA of |imbalance|/T, clamped to [0.1, 10.0]."""
-        raw = (
-            self._ewma_alpha * abs_norm_imbalance +
-            (1 - self._ewma_alpha) * self._expected_imbalance
-        )
-        self._expected_imbalance = max(0.1, min(10.0, raw))
+        """Update the EWMA of |imbalance|/T."""
+        if self._expected_imbalance is None:
+            # First calibration from warmup bar
+            self._expected_imbalance = abs_norm_imbalance if abs_norm_imbalance > 0 else 1.0
+        else:
+            self._expected_imbalance = (
+                self._ewma_alpha * abs_norm_imbalance +
+                (1 - self._ewma_alpha) * self._expected_imbalance
+            )
 
     def _threshold(self) -> float:
         """Current adaptive threshold."""
+        if self._expected_imbalance is None:
+            # During warmup, use a very high threshold (won't trigger)
+            return float('inf')
         return self._expected_ticks * self._expected_imbalance
 
     # ------------------------------------------------------------------
@@ -102,22 +111,38 @@ class _ImbalanceBarBase(EWMABarGenerator):
 
         self._acc.update(price, qty, time_ms)
 
-        # Check whether the running imbalance exceeds the threshold.
+        # Warmup: force-emit the first bar after expected_num_ticks_init
+        # ticks to calibrate the EWMA from actual data.
+        if self._bars_completed == 0:
+            if self._tick_idx >= self.expected_num_ticks_init:
+                T = self._tick_idx
+                abs_norm = abs(self._imbalance) / T if T > 0 else 1.0
+
+                bar = self._emit_bar()
+                bars.append(bar)
+
+                self._update_expected_ticks(T)
+                self._update_expected_imbalance(abs_norm)
+
+                self._imbalance = 0.0
+                self._tick_idx = 0
+                self._bars_completed += 1
+            return bars
+
+        # Normal operation: check whether imbalance exceeds adaptive threshold.
         if abs(self._imbalance) >= self._threshold():
-            # Record imbalance statistics before resetting.
             T = self._tick_idx
             abs_norm = abs(self._imbalance) / T if T > 0 else 0.0
 
             bar = self._emit_bar()
             bars.append(bar)
 
-            # Update EWMA estimates.
             self._update_expected_ticks(T)
             self._update_expected_imbalance(abs_norm)
 
-            # Reset running state for the next bar.
             self._imbalance = 0.0
             self._tick_idx = 0
+            self._bars_completed += 1
 
         return bars
 
@@ -132,6 +157,7 @@ class _ImbalanceBarBase(EWMABarGenerator):
             "expected_num_ticks_init": self.expected_num_ticks_init,
             "num_prev_bars": self.num_prev_bars,
             "expected_imbalance": self._expected_imbalance,
+            "bars_completed": self._bars_completed,
         }
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(base_state))
@@ -143,6 +169,9 @@ class _ImbalanceBarBase(EWMABarGenerator):
             state = json.loads(path.read_text())
             self._expected_imbalance = state.get(
                 "expected_imbalance", self._expected_imbalance
+            )
+            self._bars_completed = state.get(
+                "bars_completed", self._bars_completed
             )
 
 

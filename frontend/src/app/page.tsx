@@ -124,7 +124,7 @@ export default function DashboardPage() {
         {/* Footer bar */}
         <div className="flex items-center justify-between rounded-lg border border-[var(--border)] bg-[var(--surface)] px-4 py-2 text-[10px] text-zinc-600">
           <span>
-            AFML Pipeline &middot; LightGBM + Purged CV + Meta-Labeling + Bet Sizing
+            LightGBM + Purged CV + Meta-Labeling + Bet Sizing
           </span>
           <span className="num">
             {barType.replace(/_/g, " ")} &middot; {labeling.replace(/_/g, " ")}

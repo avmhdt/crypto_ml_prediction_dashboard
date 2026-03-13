@@ -141,6 +141,10 @@ def train_pipeline(
     if len(features) == 0:
         raise ValueError("No valid samples after feature warm-up (all rows have NaN)")
     labels = bars["label"].values.astype(int)
+    unique_labels = set(np.unique(labels))
+    if not unique_labels.issubset({-1, 1}):
+        raise ValueError(f"Unexpected labels after dropna: {unique_labels}. "
+                         "NaN labels may have leaked through.")
     n_long = int((labels == 1).sum())
     n_short = int((labels == -1).sum())
     logger.info(f"Samples after feature warm-up: {len(features):,}, "

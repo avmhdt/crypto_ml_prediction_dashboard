@@ -42,10 +42,10 @@ export function Header({ connected, symbol }: HeaderProps) {
           </div>
           <div>
             <h1 className="text-sm font-semibold tracking-tight text-white">
-              Crypto ML Predictions
+              Alatar
             </h1>
             <p className="text-[10px] leading-none text-zinc-500">
-              AFML Pipeline &middot; Lopez de Prado
+              Crypto ML Predictions
             </p>
           </div>
         </div>

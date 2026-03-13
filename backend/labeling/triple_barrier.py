@@ -8,9 +8,9 @@ Computes labels by setting three barriers around each bar's close price:
 The first barrier touched determines the label:
   SL hit  -> -1
   PT hit  ->  1
-  Time exit -> sign(return), with zero-return fallback to last tick direction
+  Time exit -> sign(return since entry), NaN only if return is exactly zero
 
-ALL labels are binary {-1, 1}. Never 0, never NaN.
+Labels are {-1, 1, NaN}. NaN only for exactly-zero-return time exits.
 """
 
 from __future__ import annotations
@@ -64,7 +64,7 @@ def triple_barrier_labels(
     -------
     pd.DataFrame
         Columns: ``[timestamp, label, sl_price, pt_price, time_barrier_ts]``.
-        ``label`` is always in {-1, 1}.
+        ``label`` is in {-1, 1, NaN}. NaN for perfectly flat bars.
     """
     if config is None:
         config = TripleBarrierConfig()
@@ -83,7 +83,7 @@ def triple_barrier_labels(
     pt_mult = config.pt_multiplier
     max_hold = config.max_holding_period
 
-    labels = np.empty(n, dtype=np.int64)
+    labels = np.empty(n, dtype=np.float64)
     sl_prices = np.empty(n, dtype=np.float64)
     pt_prices = np.empty(n, dtype=np.float64)
     time_barrier_indices = np.empty(n, dtype=np.int64)
@@ -123,20 +123,9 @@ def triple_barrier_labels(
             elif ret < 0:
                 label = -1
             else:
-                # Zero return at time barrier: use last tick direction.
-                # Walk backward from tb_idx to find a non-zero move.
-                direction = 0
-                for k in range(tb_idx, i, -1):
-                    diff = close[k] - close[k - 1]
-                    if diff > 0:
-                        direction = 1
-                        break
-                    elif diff < 0:
-                        direction = -1
-                        break
-                # Ultimate fallback: if everything was perfectly flat,
-                # assign +1 (arbitrary but valid binary label).
-                label = direction if direction != 0 else 1
+                # Exactly zero return at time barrier — no directional
+                # information, exclude from training.
+                label = np.nan
 
         labels[i] = label
 

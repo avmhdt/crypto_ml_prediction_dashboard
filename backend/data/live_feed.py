@@ -26,7 +26,7 @@ class BinanceLiveFeed:
     async def start(self) -> None:
         """Start streaming trade data from Binance perpetual futures."""
         self._client = await AsyncClient.create()
-        self._bsm = BinanceSocketManager(self._client)
+        self._bsm = BinanceSocketManager(self._client, max_queue_size=5000)
         self._running = True
 
         ts = self._bsm.aggtrade_futures_socket(self.symbol)

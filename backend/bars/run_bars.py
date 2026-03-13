@@ -48,9 +48,11 @@ class _RunBarBase(EWMABarGenerator):
         # ------ EWMA estimates across bars ------
         # P[b=1]: proportion of buy ticks (EWMA).
         self._p_buy: float = 0.5
-        # E[run_up/T] and E[run_down/T] (EWMA of normalised runs).
-        self._expected_run_up: float = 0.5
-        self._expected_run_down: float = 0.5
+        # E[run_up/T] and E[run_down/T] — None until calibrated from warmup bar.
+        self._expected_run_up: float | None = None
+        self._expected_run_down: float | None = None
+        # Number of completed bars (for warmup detection)
+        self._bars_completed: int = 0
 
         # ------ Tick direction state ------
         self._prev_price: float | None = None
@@ -77,17 +79,22 @@ class _RunBarBase(EWMABarGenerator):
     # ------------------------------------------------------------------
     def _update_ewma_runs(self, norm_run_up: float, norm_run_down: float,
                           p_buy_bar: float) -> None:
-        """Update EWMA estimates after a bar completes, with clamping."""
+        """Update EWMA estimates after a bar completes."""
         a = self._ewma_alpha
-        self._expected_run_up = max(0.01, min(10.0,
-            a * norm_run_up + (1 - a) * self._expected_run_up))
-        self._expected_run_down = max(0.01, min(10.0,
-            a * norm_run_down + (1 - a) * self._expected_run_down))
+        if self._expected_run_up is None:
+            # First calibration from warmup bar
+            self._expected_run_up = norm_run_up if norm_run_up > 0 else 0.5
+            self._expected_run_down = norm_run_down if norm_run_down > 0 else 0.5
+        else:
+            self._expected_run_up = a * norm_run_up + (1 - a) * self._expected_run_up
+            self._expected_run_down = a * norm_run_down + (1 - a) * self._expected_run_down
         self._p_buy = max(0.01, min(0.99,
             a * p_buy_bar + (1 - a) * self._p_buy))
 
     def _threshold(self) -> float:
         """RHS of the emission condition (adaptive threshold)."""
+        if self._expected_run_up is None:
+            return float('inf')  # During warmup
         p = self._p_buy
         return self._expected_ticks * max(
             p * self._expected_run_up,
@@ -122,7 +129,29 @@ class _RunBarBase(EWMABarGenerator):
 
         self._acc.update(price, qty, time_ms)
 
-        # Emission check.
+        # Warmup: force-emit first bar after expected_num_ticks_init ticks
+        # to calibrate the EWMA from actual data.
+        if self._bars_completed == 0:
+            if self._tick_idx >= self.expected_num_ticks_init:
+                T = self._tick_idx
+                norm_up = self._run_up / T if T > 0 else 0.0
+                norm_down = self._run_down / T if T > 0 else 0.0
+                p_buy_bar = self._buy_count / T if T > 0 else 0.5
+
+                bar = self._emit_bar()
+                bars.append(bar)
+
+                self._update_expected_ticks(T)
+                self._update_ewma_runs(norm_up, norm_down, p_buy_bar)
+
+                self._run_up = 0.0
+                self._run_down = 0.0
+                self._buy_count = 0
+                self._tick_idx = 0
+                self._bars_completed += 1
+            return bars
+
+        # Normal operation: emission check.
         if self._run_metric() >= self._threshold():
             T = self._tick_idx
             norm_up = self._run_up / T if T > 0 else 0.0
@@ -132,15 +161,14 @@ class _RunBarBase(EWMABarGenerator):
             bar = self._emit_bar()
             bars.append(bar)
 
-            # Update EWMA estimates.
             self._update_expected_ticks(T)
             self._update_ewma_runs(norm_up, norm_down, p_buy_bar)
 
-            # Reset running state.
             self._run_up = 0.0
             self._run_down = 0.0
             self._buy_count = 0
             self._tick_idx = 0
+            self._bars_completed += 1
 
         return bars
 
@@ -156,6 +184,7 @@ class _RunBarBase(EWMABarGenerator):
             "p_buy": self._p_buy,
             "expected_run_up": self._expected_run_up,
             "expected_run_down": self._expected_run_down,
+            "bars_completed": self._bars_completed,
         }
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(state))
@@ -167,6 +196,7 @@ class _RunBarBase(EWMABarGenerator):
             self._p_buy = state.get("p_buy", self._p_buy)
             self._expected_run_up = state.get("expected_run_up", self._expected_run_up)
             self._expected_run_down = state.get("expected_run_down", self._expected_run_down)
+            self._bars_completed = state.get("bars_completed", self._bars_completed)
 
 
 # ======================================================================

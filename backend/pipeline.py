@@ -1,8 +1,9 @@
-"""Live pipeline: ticks → bars → features → inference → signals.
+"""Live pipeline: ticks → bars → features → inference → signals → positions.
 
 Manages bar generators for each (symbol, bar_type) pair.
 When a bar completes, runs model inference (if models are loaded)
-to produce trading signals.
+to produce trading signals. Active signals are averaged per AFML Ch.10
+to produce position events (average active bet size, discretized).
 """
 import logging
 import time
@@ -18,7 +19,9 @@ from backend.config import (
 )
 from backend.ml.primary_model import PrimaryModel
 from backend.ml.meta_labeling import MetaLabelingModel
-from backend.ml.bet_sizing import compute_bet_sizes
+from backend.ml.bet_sizing import (
+    compute_average_exposure, compute_bet_sizes, discretize_exposure,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +45,12 @@ class LivePipeline:
         self._primary_models: dict[tuple[str, str], PrimaryModel] = {}
         self._meta_models: dict[tuple[str, str], MetaLabelingModel] = {}
         self._models_loaded = False
+
+        # AFML Ch.10: Active signal pool per bar_type for bet averaging.
+        # Each signal has {side, size, time_barrier, labeling_method, ...}.
+        self._active_signals: dict[str, list[dict]] = {bt: [] for bt in BAR_TYPES}
+        # Last discretized position per bar_type (for change detection)
+        self._last_position: dict[str, float] = {bt: 0.0 for bt in BAR_TYPES}
 
     def _init_generators(self) -> None:
         """Create bar generators for all bar types.
@@ -116,7 +125,7 @@ class LivePipeline:
         """Process a single tick through all bar generators.
 
         Returns list of events to broadcast:
-        [{"type": "bar", "data": {...}}, {"type": "signal", "data": {...}}, ...]
+        [{"type": "bar", ...}, {"type": "signal", ...}, {"type": "position", ...}]
         """
         events: list[dict] = []
 
@@ -135,8 +144,8 @@ class LivePipeline:
 
                 # Run inference if models are loaded
                 if self._models_loaded:
-                    signals = self._run_inference(bar_type, bar_dict)
-                    events.extend(signals)
+                    inference_events = self._run_inference(bar_type, bar_dict)
+                    events.extend(inference_events)
 
         return events
 
@@ -153,16 +162,38 @@ class LivePipeline:
         return events
 
     def _run_inference(self, bar_type: str, bar_dict: dict) -> list[dict]:
-        """Run model inference on the latest bar for each labeling method."""
-        signals: list[dict] = []
+        """Run model inference and compute averaged position (AFML Ch.10).
+
+        1. Generate individual signals from each labeling method's model
+        2. Add new signals to the active signal pool
+        3. Expire signals past their time barrier
+        4. Average active bets: mean(side_i * size_i), clamped to [-1, 1]
+        5. Discretize to 0.1 steps
+        6. Emit "position" event if discretized position changed
+        """
+        events: list[dict] = []
         buffer = self._bar_buffers[bar_type]
+        bar_ts = bar_dict["timestamp"]
 
         # Need enough bars for feature computation
         if len(buffer) < 25:
-            return signals
+            return events
 
+        # Compute features once for all labeling methods
         bars_df = pd.DataFrame(buffer)
+        features = self._compute_features_fast(bars_df)
+        if features is None or features.empty:
+            return events
 
+        last_features = features.iloc[[-1]]
+
+        # Compute volatility once
+        entry_price = bar_dict["close"]
+        volatility = bars_df["close"].pct_change().rolling(20).std().iloc[-1]
+        if pd.isna(volatility) or volatility <= 0:
+            volatility = 0.01
+
+        # Generate individual signals from each labeling method
         for labeling in LABELING_METHODS:
             key = (bar_type, labeling)
             primary = self._primary_models.get(key)
@@ -170,13 +201,6 @@ class LivePipeline:
                 continue
 
             try:
-                features = self._compute_features_fast(bars_df)
-                if features is None or features.empty:
-                    continue
-
-                # Get last row features for prediction
-                last_features = features.iloc[[-1]]
-
                 # Ensure we have all required feature columns
                 missing = set(primary.feature_names) - set(last_features.columns)
                 if missing:
@@ -208,11 +232,6 @@ class LivePipeline:
                 if bet_size <= 0:
                     continue
 
-                entry_price = bar_dict["close"]
-                volatility = bars_df["close"].pct_change().rolling(20).std().iloc[-1]
-                if pd.isna(volatility) or volatility <= 0:
-                    volatility = 0.01
-
                 sl_price = entry_price * (1 - side * 2 * volatility)
                 pt_price = entry_price * (1 + side * 2 * volatility)
 
@@ -220,21 +239,54 @@ class LivePipeline:
                     "symbol": self.symbol,
                     "bar_type": bar_type,
                     "labeling_method": labeling,
-                    "timestamp": bar_dict["timestamp"],
+                    "timestamp": bar_ts,
                     "side": side,
                     "size": bet_size,
                     "entry_price": entry_price,
                     "sl_price": sl_price,
                     "pt_price": pt_price,
-                    "time_barrier": bar_dict["timestamp"] + 3_600_000,  # 1h default
+                    "time_barrier": bar_ts + 3_600_000,  # 1h default
                     "meta_probability": meta_proba,
                 }
-                signals.append({"type": "signal", "data": signal})
+
+                # Emit individual signal (for DuckDB storage)
+                events.append({"type": "signal", "data": signal})
+
+                # Add to active signal pool
+                self._active_signals[bar_type].append(signal)
 
             except Exception as e:
                 logger.debug(f"Inference failed for {key}: {e}")
 
-        return signals
+        # Expire signals past their time barrier
+        self._active_signals[bar_type] = [
+            s for s in self._active_signals[bar_type]
+            if s["time_barrier"] > bar_ts
+        ]
+
+        # AFML Ch.10: Average active bets
+        active = self._active_signals[bar_type]
+        exposure = compute_average_exposure(active)
+        discretized = discretize_exposure(exposure)
+
+        # Emit position event if changed
+        if discretized != self._last_position[bar_type]:
+            self._last_position[bar_type] = discretized
+            position_event = {
+                "symbol": self.symbol,
+                "bar_type": bar_type,
+                "timestamp": bar_ts,
+                "exposure": discretized,
+                "num_active": len(active),
+                "entry_price": entry_price,
+            }
+            events.append({"type": "position", "data": position_event})
+            logger.info(
+                f"Position change: {self.symbol} {bar_type} "
+                f"exposure={discretized:.1f} active={len(active)}"
+            )
+
+        return events
 
     def _compute_features_fast(self, bars_df: pd.DataFrame) -> pd.DataFrame | None:
         """Compute features from bar buffer. Lightweight version for live inference."""

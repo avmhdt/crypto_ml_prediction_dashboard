@@ -462,3 +462,230 @@ def kontoyiannis_entropy(series: pd.Series, window: int = 50) -> float:
     log_window = np.log2(window) if window > 1 else 1.0
     # Entropy ~ log2(window) / avg_match_length
     return float(log_window / avg_match) if avg_match > 0 else 0.0
+
+
+# ---------------------------------------------------------------------------
+# Structural Breaks — Rolling Test Statistics
+# ---------------------------------------------------------------------------
+
+
+def bde_cusum_stat(log_prices: pd.Series, window: int = 50) -> pd.Series:
+    """Brown-Durbin-Evans CUSUM test statistic on recursive residuals.
+
+    For each rolling window, fits OLS on a time trend, computes recursive
+    residuals, and returns max|CUSUM| / sqrt(window).
+
+    Parameters
+    ----------
+    log_prices : pd.Series
+        Log price series.
+    window : int
+        Rolling window size.
+
+    Returns
+    -------
+    pd.Series
+        Rolling BDE CUSUM statistic.
+    """
+    values = log_prices.values.astype(np.float64)
+    n = len(values)
+    result = np.full(n, np.nan)
+
+    for i in range(window, n):
+        y = values[i - window : i]
+        t = np.arange(window, dtype=np.float64)
+        X = np.column_stack([np.ones(window), t])
+
+        # Recursive residuals: fit on first k obs, predict k+1
+        min_obs = max(3, window // 4)
+        residuals = []
+        for k in range(min_obs, window):
+            Xk = X[:k]
+            yk = y[:k]
+            try:
+                beta = np.linalg.lstsq(Xk, yk, rcond=None)[0]
+                pred = X[k] @ beta
+                residuals.append(y[k] - pred)
+            except np.linalg.LinAlgError:
+                residuals.append(0.0)
+
+        if len(residuals) < 2:
+            continue
+        res = np.array(residuals)
+        sigma = np.std(res)
+        if sigma < 1e-15:
+            result[i] = 0.0
+            continue
+        cusum = np.cumsum(res / sigma)
+        result[i] = float(np.max(np.abs(cusum)) / np.sqrt(len(cusum)))
+
+    return pd.Series(result, index=log_prices.index, name="bde_cusum")
+
+
+def csw_cusum_stat(log_prices: pd.Series, window: int = 50) -> pd.Series:
+    """Chu-Stinchcombe-White CUSUM test statistic on levels.
+
+    Measures cumulative deviations of log prices from the window mean,
+    standardised by the window standard deviation.
+
+    Parameters
+    ----------
+    log_prices : pd.Series
+        Log price series.
+    window : int
+        Rolling window size.
+
+    Returns
+    -------
+    pd.Series
+        Rolling CSW CUSUM statistic.
+    """
+    values = log_prices.values.astype(np.float64)
+    n = len(values)
+    result = np.full(n, np.nan)
+
+    for i in range(window, n):
+        y = values[i - window : i]
+        mu = np.mean(y)
+        sigma = np.std(y, ddof=1)
+        if sigma < 1e-15:
+            result[i] = 0.0
+            continue
+        cusum = np.cumsum(y - mu) / sigma
+        result[i] = float(np.max(np.abs(cusum)) / np.sqrt(window))
+
+    return pd.Series(result, index=log_prices.index, name="csw_cusum")
+
+
+def chow_type_df_stat(log_prices: pd.Series, window: int = 50) -> pd.Series:
+    """Chow-type Dickey-Fuller test statistic.
+
+    Splits each rolling window at the midpoint and returns the maximum
+    ADF t-statistic from both sub-samples.
+
+    Parameters
+    ----------
+    log_prices : pd.Series
+        Log price series.
+    window : int
+        Rolling window size.
+
+    Returns
+    -------
+    pd.Series
+        Rolling Chow-type DF statistic.
+    """
+    values = log_prices.values.astype(np.float64)
+    n = len(values)
+    result = np.full(n, np.nan)
+    min_half = max(10, window // 4)
+
+    for i in range(window, n):
+        y = values[i - window : i]
+        mid = window // 2
+        if mid < min_half or (window - mid) < min_half:
+            continue
+        try:
+            adf1, *_ = adfuller(y[:mid], maxlag=1, regression="c", autolag=None)
+            adf2, *_ = adfuller(y[mid:], maxlag=1, regression="c", autolag=None)
+            result[i] = float(max(adf1, adf2))
+        except Exception:
+            continue
+
+    return pd.Series(result, index=log_prices.index, name="chow_type_df")
+
+
+def martingale_tests(log_prices: pd.Series, window: int = 50) -> pd.DataFrame:
+    """Sub- and super-martingale tests with polynomial, exponential, power trends.
+
+    For each rolling window, regresses cumulative returns on trend functions
+    and returns the t-statistic of the trend coefficient.
+
+    Parameters
+    ----------
+    log_prices : pd.Series
+        Log price series.
+    window : int
+        Rolling window size.
+
+    Returns
+    -------
+    pd.DataFrame
+        Columns: martingale_poly_t, martingale_exp_t, martingale_power_t.
+    """
+    values = log_prices.values.astype(np.float64)
+    n = len(values)
+    poly_t = np.full(n, np.nan)
+    exp_t = np.full(n, np.nan)
+    power_t = np.full(n, np.nan)
+
+    for i in range(window, n):
+        y = values[i - window : i]
+        # Cumulative returns from start of window
+        cum_ret = y - y[0]
+        t_arr = np.arange(1, window + 1, dtype=np.float64)
+
+        for trend_type, trend_fn, out_arr in [
+            ("poly", t_arr, poly_t),
+            ("exp", np.exp(t_arr / window), exp_t),
+            ("power", np.sqrt(t_arr), power_t),
+        ]:
+            X = np.column_stack([np.ones(window), trend_fn])
+            try:
+                beta, residuals_sum, rank, sv = np.linalg.lstsq(X, cum_ret, rcond=None)
+                if rank < 2:
+                    continue
+                y_hat = X @ beta
+                rss = np.sum((cum_ret - y_hat) ** 2)
+                mse = rss / (window - 2)
+                XtX_inv = np.linalg.inv(X.T @ X)
+                se_beta = np.sqrt(mse * XtX_inv[1, 1])
+                if se_beta > 1e-15:
+                    out_arr[i] = float(beta[1] / se_beta)
+            except (np.linalg.LinAlgError, ValueError):
+                continue
+
+    return pd.DataFrame(
+        {"martingale_poly_t": poly_t, "martingale_exp_t": exp_t, "martingale_power_t": power_t},
+        index=log_prices.index,
+    )
+
+
+def rolling_sadf_stat(log_prices: pd.Series, window: int = 50) -> pd.Series:
+    """Rolling SADF (Supremum ADF) test statistic.
+
+    Computes the SADF test over each rolling window.
+
+    Parameters
+    ----------
+    log_prices : pd.Series
+        Log price series.
+    window : int
+        Rolling window size.
+
+    Returns
+    -------
+    pd.Series
+        Rolling SADF statistic.
+    """
+    values = log_prices.values.astype(np.float64)
+    n = len(values)
+    result = np.full(n, np.nan)
+    min_sub = max(15, window // 3)
+
+    for i in range(window, n):
+        chunk = values[i - window : i]
+        max_adf = -np.inf
+        for end in range(min_sub, len(chunk) + 1):
+            try:
+                adf_stat, *_ = adfuller(
+                    chunk[:end], maxlag=1, regression="c", autolag=None
+                )
+                if adf_stat > max_adf:
+                    max_adf = adf_stat
+            except Exception:
+                continue
+        if max_adf > -np.inf:
+            result[i] = float(max_adf)
+
+    return pd.Series(result, index=log_prices.index, name="rolling_sadf")

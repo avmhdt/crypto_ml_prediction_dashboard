@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Crypto ML Prediction Dashboard",
-  description: "Live crypto perpetual futures prediction signals using AFML methodology",
+  title: "Alatar — Crypto ML Prediction Dashboard",
+  description: "Live crypto perpetual futures prediction signals",
 };
 
 export default function RootLayout({

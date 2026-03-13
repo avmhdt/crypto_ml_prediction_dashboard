@@ -57,6 +57,18 @@ _active_feeds: dict[str, BinanceLiveFeed] = {}
 _feed_tasks: dict[str, asyncio.Task] = {}
 _pipelines: dict[str, LivePipeline] = {}
 
+# Shared DuckDB connection for all feed writers (avoids lock contention)
+_shared_conn = None
+
+
+def _get_shared_conn():
+    """Get or create a shared DuckDB connection for feed writes."""
+    global _shared_conn
+    if _shared_conn is None:
+        _shared_conn = get_connection()
+        logger.info("Shared DuckDB connection opened for live feeds")
+    return _shared_conn
+
 
 def _get_pipeline(symbol: str) -> LivePipeline:
     """Get or create pipeline for a symbol."""
@@ -68,7 +80,14 @@ def _get_pipeline(symbol: str) -> LivePipeline:
 
 
 async def _run_live_feed(symbol: str):
-    """Run live feed for a symbol, processing ticks through the full pipeline."""
+    """Run live feed for a symbol, processing ticks through the full pipeline.
+
+    Individual batch errors are caught and logged without killing the feed.
+    The feed only dies on CancelledError (shutdown) or unrecoverable init errors.
+    """
+    consecutive_errors = 0
+    max_consecutive_errors = 30  # Give up after 30 consecutive failures
+
     try:
         logger.info(f"Starting live feed for {symbol}")
         feed = BinanceLiveFeed(symbol)
@@ -76,19 +95,27 @@ async def _run_live_feed(symbol: str):
         pipeline = _get_pipeline(symbol)
         logger.info(f"Pipeline ready for {symbol}, models_loaded={pipeline._models_loaded}")
 
-        conn = get_connection()
-        logger.info(f"DuckDB connection opened for {symbol} live feed")
+        conn = _get_shared_conn()
         last_prune = time.time()
+        batch_count = 0
 
         async def on_batch():
-            nonlocal last_prune
+            nonlocal last_prune, batch_count
             ticks = await feed.flush_buffer()
             if ticks:
+                batch_count += 1
                 # Insert raw ticks into DuckDB
-                insert_ticks_batch(conn, ticks)
+                try:
+                    insert_ticks_batch(conn, ticks)
+                except Exception as e:
+                    logger.error(f"[{symbol}] Failed to insert {len(ticks)} ticks: {e}")
 
                 # Process ticks through pipeline (bars + inference)
                 events = pipeline.process_ticks_batch(ticks)
+
+                # Log periodic status
+                if batch_count % 30 == 0:
+                    logger.info(f"[{symbol}] batch #{batch_count}: {len(ticks)} ticks, {len(events)} events")
 
                 # Persist and broadcast each event
                 for event in events:
@@ -113,23 +140,37 @@ async def _run_live_feed(symbol: str):
 
             # Prune old data every 5 minutes
             if time.time() - last_prune > 300:
-                prune_old_data(conn, int(time.time() * 1000))
+                try:
+                    prune_old_data(conn, int(time.time() * 1000))
+                except Exception as e:
+                    logger.error(f"[{symbol}] Prune failed: {e}")
                 last_prune = time.time()
 
-        # Start feed in background
+        # Start Binance WebSocket feed in background
         feed_task = asyncio.create_task(feed.start())
+        logger.info(f"[{symbol}] Binance feed task started, entering batch loop")
 
         try:
             while True:
                 await asyncio.sleep(1)
-                await on_batch()
+                try:
+                    await on_batch()
+                    consecutive_errors = 0  # Reset on success
+                except asyncio.CancelledError:
+                    raise  # Let CancelledError propagate
+                except Exception:
+                    consecutive_errors += 1
+                    logger.exception(f"[{symbol}] on_batch error #{consecutive_errors}")
+                    if consecutive_errors >= max_consecutive_errors:
+                        logger.error(f"[{symbol}] Too many consecutive errors, feed dying")
+                        break
+                    await asyncio.sleep(min(consecutive_errors, 5))
         except asyncio.CancelledError:
+            logger.info(f"[{symbol}] Feed cancelled, shutting down")
             await feed.stop()
             feed_task.cancel()
-        finally:
-            conn.close()
     except Exception:
-        logger.exception(f"Live feed for {symbol} crashed")
+        logger.exception(f"Live feed for {symbol} crashed during init")
 
 
 def _insert_bar(conn, bar_data: dict) -> None:
@@ -175,20 +216,35 @@ def _ensure_feed_running(symbol: str):
     """Ensure live feed is running for a symbol."""
     symbol_upper = symbol.upper()
     if symbol_upper not in _feed_tasks or _feed_tasks[symbol_upper].done():
-        logger.info(f"Launching feed task for {symbol_upper}")
         if symbol_upper in _feed_tasks and _feed_tasks[symbol_upper].done():
-            exc = _feed_tasks[symbol_upper].exception()
-            if exc:
-                logger.error(f"Previous feed task for {symbol_upper} failed: {exc}")
+            try:
+                exc = _feed_tasks[symbol_upper].exception()
+                if exc:
+                    logger.error(f"Previous feed for {symbol_upper} failed: {exc}")
+            except asyncio.CancelledError:
+                pass
+        logger.info(f"Launching feed task for {symbol_upper}")
         _feed_tasks[symbol_upper] = asyncio.create_task(
             _run_live_feed(symbol_upper)
         )
+
+
+async def _feed_watchdog():
+    """Periodically check and restart dead feed tasks."""
+    while True:
+        await asyncio.sleep(10)
+        for symbol in SYMBOLS:
+            if symbol in _feed_tasks and _feed_tasks[symbol].done():
+                logger.warning(f"Watchdog: restarting dead feed for {symbol}")
+                _ensure_feed_running(symbol)
 
 
 def start_all_feeds():
     """Start live feeds for all configured symbols (called at app startup)."""
     for symbol in SYMBOLS:
         _ensure_feed_running(symbol)
+    # Start watchdog to auto-restart dead feeds
+    asyncio.create_task(_feed_watchdog())
 
 
 @router.websocket("/ws/{symbol}")
