@@ -4,7 +4,8 @@ For each bar, run OLS regression of close prices over multiple candidate
 forward horizons.  Select the horizon with the maximum |t-value| of the
 slope coefficient.  The label is ``sign(slope)`` at the selected horizon.
 
-ALL labels are binary {-1, 1}. Never 0, never NaN.
+Labels are {-1, 1, NaN}. Zero-slope/zero-return bars produce NaN
+(excluded from training) to avoid systematic LONG bias.
 """
 
 from __future__ import annotations
@@ -78,7 +79,7 @@ def trend_scanning_labels(
     -------
     pd.DataFrame
         Columns: ``[timestamp, label, best_horizon, t_value]``.
-        ``label`` is always in {-1, 1}.
+        ``label`` is in {-1, 1, NaN}. NaN for zero-slope/return bars.
     """
     if horizons is None:
         horizons = [5, 10, 20, 40, 80]
@@ -87,7 +88,7 @@ def trend_scanning_labels(
     timestamps = bars["timestamp"].values
     n = len(close)
 
-    labels = np.empty(n, dtype=np.int64)
+    labels = np.empty(n, dtype=np.float64)
     best_horizons = np.empty(n, dtype=np.int64)
     t_values = np.empty(n, dtype=np.float64)
 
@@ -130,8 +131,9 @@ def trend_scanning_labels(
             elif raw_ret < 0:
                 label = -1
             else:
-                # Perfectly flat: arbitrary valid binary label.
-                label = 1
+                # Perfectly flat: no directional information — exclude
+                # from training to avoid systematic LONG bias.
+                label = np.nan
 
         labels[i] = label
         best_horizons[i] = best_h

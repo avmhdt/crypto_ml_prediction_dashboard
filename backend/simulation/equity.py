@@ -11,6 +11,8 @@ import numpy as np
 import pandas as pd
 from dataclasses import dataclass, field
 
+from backend.ml.bet_sizing import compute_average_exposure
+
 
 @dataclass
 class SimulationResult:
@@ -133,11 +135,7 @@ def simulate_equity(
         active = still_active
 
         # 3. Compute exposure (AFML Ch.10 averaging)
-        if active:
-            raw = sum(p["side"] * p["size"] for p in active) / len(active)
-            exposure = max(-1.0, min(1.0, raw))
-        else:
-            exposure = 0.0
+        exposure = compute_average_exposure(active)
 
         # 4. P&L from price movement on previous exposure
         if prev_close > 0 and bar_idx > 0:

@@ -77,6 +77,39 @@ def discretize_bet_size(sizes: np.ndarray,
     return levels[indices]
 
 
+def compute_average_exposure(active_positions: list[dict]) -> float:
+    """Compute average exposure from concurrent active positions (AFML Ch.10).
+
+    Parameters
+    ----------
+    active_positions : list of dicts, each with 'side' and 'size' keys
+
+    Returns
+    -------
+    exposure : float in [-1.0, 1.0], clamped
+    """
+    if not active_positions:
+        return 0.0
+    raw = sum(p["side"] * p["size"] for p in active_positions) / len(active_positions)
+    return max(-1.0, min(1.0, raw))
+
+
+def discretize_exposure(exposure: float, step: float = 0.1) -> float:
+    """Discretize signed exposure to nearest step increment.
+
+    Parameters
+    ----------
+    exposure : float in [-1.0, 1.0]
+    step : discretization step (default 0.1)
+
+    Returns
+    -------
+    discretized : float rounded to nearest step
+    """
+    inv = round(1.0 / step)
+    return round(exposure * inv) / inv
+
+
 def compute_concurrency_at_signals(signal_timestamps: np.ndarray,
                                     label_spans: list[tuple[int, int]]) -> np.ndarray:
     """Compute how many active bets overlap at each signal's timestamp.
