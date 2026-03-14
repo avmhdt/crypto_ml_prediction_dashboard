@@ -183,19 +183,23 @@ export function EquityCurve({
 
     const timer = setTimeout(() => {
       fetch(fetchUrl, { signal: controller.signal })
-        .then((r) => r.json())
+        .then((r) => {
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          return r.json();
+        })
         .then((d) => {
-          if (mode === "both") {
-            // Response shape: EquityComparisonData
-            const comparison = d as EquityComparisonData;
-            setSimpleData(comparison.simple);
-            setRealisticData(comparison.realistic);
+          if (mode === "both" && d && d.simple && d.realistic) {
+            // Response shape: { simple: EquityData, realistic: EquityData }
+            setSimpleData(d.simple as EquityData);
+            setRealisticData(d.realistic as EquityData & { metrics: RealisticMetrics });
+          } else if (mode === "both" && d && d.timestamps) {
+            // Fallback: server returned single EquityData instead of comparison
+            setSimpleData(d as EquityData);
+            setRealisticData(null);
           } else if (mode === "realistic") {
-            // Response shape: EquityData with RealisticMetrics
             setSimpleData(null);
             setRealisticData(d as EquityData & { metrics: RealisticMetrics });
           } else {
-            // Response shape: EquityData
             setSimpleData(d as EquityData);
             setRealisticData(null);
           }
@@ -203,6 +207,7 @@ export function EquityCurve({
         })
         .catch((e) => {
           if (e.name !== "AbortError") {
+            console.error("Equity fetch error:", e);
             setSimpleData(null);
             setRealisticData(null);
             setLoading(false);
@@ -326,11 +331,6 @@ export function EquityCurve({
   useEffect(() => {
     if (!equitySeriesRef.current || !investedSeriesRef.current || !ddSeriesRef.current || !realisticSeriesRef.current) return;
 
-    // Determine which data to show on the green (primary) series
-    const primaryData = mode === "realistic" ? null : simpleData;
-    // Determine which data to show on the blue (realistic) series
-    const secondaryData = realisticData;
-
     // Clear all series first
     equitySeriesRef.current.setData([]);
     investedSeriesRef.current.setData([]);
@@ -338,26 +338,35 @@ export function EquityCurve({
     realisticSeriesRef.current.setData([]);
 
     // In "simple" mode: green = simple, blue hidden
-    // In "realistic" mode: green hidden, blue = realistic
-    // In "both" mode: green = simple, blue = realistic
+    // In "realistic" mode: blue = realistic (green hidden), drawdown from realistic
+    // In "both" mode: green = simple, blue = realistic, drawdown from simple
 
-    if (primaryData && primaryData.timestamps.length > 0) {
-      const indices = deduplicateTimestamps(primaryData.timestamps);
-      const chartData = toChartData(primaryData, indices);
-      equitySeriesRef.current.setData(chartData.equity);
-      investedSeriesRef.current.setData(chartData.invested);
-      ddSeriesRef.current.setData(chartData.drawdown);
-    }
-
-    if (secondaryData && secondaryData.timestamps.length > 0) {
-      const indices = deduplicateTimestamps(secondaryData.timestamps);
-      const chartData = toChartData(secondaryData, indices);
-      realisticSeriesRef.current.setData(chartData.equity);
-
-      // If mode is "realistic" (no simple data), use realistic data for drawdown too
-      if (mode === "realistic") {
-        ddSeriesRef.current.setData(chartData.drawdown);
-        investedSeriesRef.current.setData(chartData.invested);
+    if (mode === "simple" && simpleData && simpleData.timestamps.length > 0) {
+      const indices = deduplicateTimestamps(simpleData.timestamps);
+      const cd = toChartData(simpleData, indices);
+      equitySeriesRef.current.setData(cd.equity);
+      investedSeriesRef.current.setData(cd.invested);
+      ddSeriesRef.current.setData(cd.drawdown);
+    } else if (mode === "realistic" && realisticData && realisticData.timestamps.length > 0) {
+      const indices = deduplicateTimestamps(realisticData.timestamps);
+      const cd = toChartData(realisticData, indices);
+      realisticSeriesRef.current.setData(cd.equity);
+      investedSeriesRef.current.setData(cd.invested);
+      ddSeriesRef.current.setData(cd.drawdown);
+    } else if (mode === "both") {
+      // Show simple on green series
+      if (simpleData && simpleData.timestamps.length > 0) {
+        const si = deduplicateTimestamps(simpleData.timestamps);
+        const scd = toChartData(simpleData, si);
+        equitySeriesRef.current.setData(scd.equity);
+        investedSeriesRef.current.setData(scd.invested);
+        ddSeriesRef.current.setData(scd.drawdown);
+      }
+      // Show realistic on blue series
+      if (realisticData && realisticData.timestamps.length > 0) {
+        const ri = deduplicateTimestamps(realisticData.timestamps);
+        const rcd = toChartData(realisticData, ri);
+        realisticSeriesRef.current.setData(rcd.equity);
       }
     }
   }, [simpleData, realisticData, mode]);
