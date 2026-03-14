@@ -6,11 +6,14 @@ Usage:
 """
 import argparse
 import logging
+import re
 import sys
 import time
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+_DATE_PATTERN = re.compile(r"(\d{4}-\d{2}-\d{2})\.csv$")
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -55,32 +58,44 @@ def main():
     print(f"  Optuna: {args.trials} trials, {args.timeout}s timeout each")
     print(f"{'='*60}\n")
 
-    # Compute time range for recent data
-    # Use the latest available data end date
-    end_ms = int(datetime(2025, 7, 3, tzinfo=timezone.utc).timestamp() * 1000)
-    start_ms = int((datetime(2025, 7, 3, tzinfo=timezone.utc) -
-                    timedelta(days=args.days)).timestamp() * 1000)
+    # Compute time range — scan the data directory for the actual date range
+    # Check both aggTrades (tick_data/) and trades (trades_data/) directories
+    all_csvs = []
+    for sub in ["tick_data", "trades_data"]:
+        data_path = Path(args.data_dir) / sub / "futures_um" / args.symbol
+        if data_path.exists():
+            all_csvs.extend(sorted(data_path.glob("*.csv")))
+    # Extract dates from filenames and find the full range
+    all_dates = []
+    for f in all_csvs:
+        m = _DATE_PATTERN.search(f.name)
+        if m:
+            all_dates.append(datetime.strptime(m.group(1), "%Y-%m-%d").replace(tzinfo=timezone.utc))
+    if all_dates:
+        data_start = min(all_dates)
+        data_end = max(all_dates)
+        end_ms = int((data_end + timedelta(days=1)).timestamp() * 1000)
+        if args.days >= (data_end - data_start).days:
+            start_ms = int(data_start.timestamp() * 1000)
+        else:
+            start_ms = int((data_end - timedelta(days=args.days - 1)).timestamp() * 1000)
+    else:
+        end_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        start_ms = int((datetime.now(timezone.utc) - timedelta(days=args.days)).timestamp() * 1000)
 
     print(f"Time range: {datetime.fromtimestamp(start_ms/1000, tz=timezone.utc).date()} "
-          f"to {datetime.fromtimestamp(end_ms/1000, tz=timezone.utc).date()}\n")
+          f"to {datetime.fromtimestamp(end_ms/1000, tz=timezone.utc).date()}")
 
-    # Load trade data once (shared across all combinations)
-    from backend.data.csv_reader import read_trades_for_symbol
-    print(f"Loading {args.symbol} trades...")
-    t0 = time.time()
-    trades = read_trades_for_symbol(
-        args.symbol, Path(args.data_dir),
-        start_time=start_ms, end_time=end_ms,
-    )
-    load_time = time.time() - t0
-    print(f"Loaded {len(trades):,} trades in {load_time:.1f}s\n")
+    from backend.data.csv_reader import iter_trade_files
+    n_files = len(iter_trade_files(args.symbol, Path(args.data_dir), start_ms, end_ms))
+    print(f"Data files: {n_files} CSVs (streaming, ~40 MB peak per file)\n")
 
-    if trades.empty:
-        print("ERROR: No trades loaded. Check data path and time range.")
+    if n_files == 0:
+        print("ERROR: No data files found. Check data path and time range.")
         sys.exit(1)
 
-    # Train each combination
-    from backend.ml.training import generate_bars, generate_labels, train_pipeline
+    # Train each combination — trades are streamed per-combo, not pre-loaded
+    from backend.ml.training import train_pipeline
     from backend.config import BarConfig, TripleBarrierConfig, MODELS_DIR
 
     training_config = TrainingConfig(
@@ -111,7 +126,7 @@ def main():
                     bar_config=bar_config,
                     barrier_config=barrier_config,
                     training_config=training_config,
-                    trades=trades,
+                    trades=None,  # stream from disk per-combo
                 )
                 elapsed = time.time() - t1
                 result["elapsed_seconds"] = elapsed

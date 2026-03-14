@@ -14,7 +14,7 @@ from backend.config import (
     BarConfig, TripleBarrierConfig, TrainingConfig,
     MODELS_DIR, TICK_DATA_DIR,
 )
-from backend.data.csv_reader import read_trades_for_symbol
+from backend.data.csv_reader import read_trades_for_symbol, iter_trade_files, read_single_file
 from backend.bars import BAR_CLASSES
 from backend.labeling.triple_barrier import triple_barrier_labels
 from backend.labeling.trend_scanning import trend_scanning_labels
@@ -35,40 +35,92 @@ LABELING_FUNCTIONS = {
 }
 
 
-def generate_bars(trades: pd.DataFrame, symbol: str, bar_type: str,
-                  bar_config: BarConfig) -> pd.DataFrame:
-    """Generate bars from raw trade data."""
+def _make_generator(symbol: str, bar_type: str, bar_config: BarConfig):
+    """Create a bar generator for the given type."""
     bar_class = BAR_CLASSES[bar_type]
-
     if bar_type == "time":
-        generator = bar_class(symbol, bar_config.time_interval)
+        return bar_class(symbol, bar_config.time_interval)
     elif bar_type in ("tick", "volume", "dollar"):
         thresholds = {
             "tick": bar_config.tick_count,
             "volume": bar_config.volume_threshold,
             "dollar": bar_config.dollar_threshold,
         }
-        generator = bar_class(symbol, thresholds[bar_type])
+        return bar_class(symbol, thresholds[bar_type])
     else:
-        # Imbalance/run bars — concrete classes hardcode bar_type internally
-        generator = bar_class(
+        return bar_class(
             symbol,
             expected_num_ticks_init=bar_config.tick_count,
             num_prev_bars=bar_config.ewma_span,
         )
 
+
+def generate_bars(trades: pd.DataFrame, symbol: str, bar_type: str,
+                  bar_config: BarConfig) -> pd.DataFrame:
+    """Generate bars from a pre-loaded trades DataFrame."""
+    generator = _make_generator(symbol, bar_type, bar_config)
     bars = generator.process_ticks(
         trades["price"].values,
         trades["qty"].values,
         trades["time"].values,
         trades["is_buyer_maker"].values,
     )
-
     if not bars:
         return pd.DataFrame()
+    return pd.DataFrame([b.to_dict() for b in bars])
 
-    records = [b.to_dict() for b in bars]
-    return pd.DataFrame(records)
+
+def generate_bars_streaming(
+    symbol: str,
+    bar_type: str,
+    bar_config: BarConfig,
+    data_dir: Path,
+    start_time: int | None = None,
+    end_time: int | None = None,
+) -> pd.DataFrame:
+    """Generate bars by streaming CSVs one file at a time.
+
+    Instead of loading all trades into memory (~78 GB for 2011 files),
+    reads each CSV, feeds its ticks to the bar generator, then frees
+    the CSV data. Peak memory is ~one CSV (~40 MB) + accumulated bars.
+    """
+    generator = _make_generator(symbol, bar_type, bar_config)
+    files = iter_trade_files(symbol, data_dir, start_time, end_time)
+
+    all_bars = []
+    total_ticks = 0
+
+    for i, (csv_path, fmt) in enumerate(files):
+        chunk = read_single_file(csv_path, fmt, symbol, start_time, end_time)
+        if chunk is None or chunk.empty:
+            continue
+
+        n = len(chunk)
+        total_ticks += n
+
+        new_bars = generator.process_ticks(
+            chunk["price"].values,
+            chunk["qty"].values,
+            chunk["time"].values,
+            chunk["is_buyer_maker"].values,
+        )
+        all_bars.extend(new_bars)
+
+        # Log progress every 100 files
+        if (i + 1) % 100 == 0 or i == len(files) - 1:
+            logger.info(
+                f"  Streamed {i+1}/{len(files)} files, "
+                f"{total_ticks:,} ticks → {len(all_bars):,} bars"
+            )
+
+        # Free the chunk immediately
+        del chunk
+
+    logger.info(f"Streaming complete: {total_ticks:,} ticks → {len(all_bars):,} bars")
+
+    if not all_bars:
+        return pd.DataFrame()
+    return pd.DataFrame([b.to_dict() for b in all_bars])
 
 
 def generate_labels(bars: pd.DataFrame, labeling_method: str,
@@ -103,16 +155,19 @@ def train_pipeline(
     barrier_config = barrier_config or TripleBarrierConfig()
     training_config = training_config or TrainingConfig()
 
-    if trades is None:
-        logger.info(f"Loading trades for {symbol} from {data_dir}")
-        trades = read_trades_for_symbol(symbol, data_dir)
-    if trades.empty:
-        raise ValueError(f"No trade data found for {symbol} in {data_dir}")
-    logger.info(f"Using {len(trades):,} trades")
-
-    # Step 1: Generate bars
+    # Step 1: Generate bars — use streaming to avoid loading all trades into memory
     logger.info(f"Generating {bar_type} bars...")
-    bars = generate_bars(trades, symbol, bar_type, bar_config)
+    if trades is not None:
+        # Pre-loaded trades (small dataset or testing)
+        logger.info(f"Using {len(trades):,} pre-loaded trades")
+        bars = generate_bars(trades, symbol, bar_type, bar_config)
+    else:
+        # Stream through CSV files one at a time (~40 MB peak vs ~78 GB all-at-once)
+        logger.info(f"Streaming from {data_dir}")
+        bars = generate_bars_streaming(
+            symbol, bar_type, bar_config, data_dir,
+            start_time=None, end_time=None,
+        )
     if bars.empty or len(bars) < 100:
         raise ValueError(f"Insufficient bars generated: {len(bars)}")
     logger.info(f"Generated {len(bars):,} bars")

@@ -185,6 +185,56 @@ def _build_time_filter(
     return ""
 
 
+def iter_trade_files(
+    symbol: str,
+    data_dir: Path = TICK_DATA_DIR,
+    start_time: int | None = None,
+    end_time: int | None = None,
+) -> list[tuple[Path, str]]:
+    """Return an ordered list of (csv_path, format) for a symbol.
+
+    ``format`` is ``'aggtrades'`` or ``'trades'``.  Files are ordered by
+    date so they can be streamed chronologically.  This does NOT load
+    any data — it just lists what's available.
+    """
+    files: list[tuple[Path, str]] = []
+
+    agg_dir = data_dir / "tick_data" / "futures_um" / symbol
+    if agg_dir.exists():
+        for f in sorted(agg_dir.glob(f"{symbol}-aggTrades-*.csv")):
+            if _file_date_in_range(f, start_time, end_time):
+                files.append((f, "aggtrades"))
+
+    trades_dir = data_dir / "trades_data" / "futures_um" / symbol
+    if trades_dir.exists():
+        for f in sorted(trades_dir.glob(f"{symbol}-trades-*.csv")):
+            if _file_date_in_range(f, start_time, end_time):
+                files.append((f, "trades"))
+
+    return files
+
+
+def read_single_file(
+    csv_path: Path,
+    fmt: str,
+    symbol: str,
+    start_time: int | None = None,
+    end_time: int | None = None,
+) -> pd.DataFrame | None:
+    """Read a single CSV file and return a DataFrame.
+
+    Args:
+        csv_path: Path to CSV file.
+        fmt: ``'aggtrades'`` or ``'trades'``.
+        symbol: Trading symbol.
+        start_time: Optional start filter (epoch ms).
+        end_time: Optional end filter (epoch ms).
+    """
+    if fmt == "aggtrades":
+        return _read_aggtrades_csv(csv_path, symbol, start_time, end_time)
+    return _read_trades_csv(csv_path, symbol, start_time, end_time)
+
+
 def list_available_symbols(data_dir: Path = TICK_DATA_DIR) -> list[str]:
     """List symbols that have CSV data available on disk."""
     available = []
