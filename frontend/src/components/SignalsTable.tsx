@@ -153,7 +153,7 @@ export function SignalsTable({ signals }: SignalsTableProps) {
             ) : (
               sorted.map((signal, idx) => (
                 <tr
-                  key={signal.id}
+                  key={signal.id ?? `${signal.timestamp}-${signal.side}-${idx}`}
                   className={`border-t border-zinc-800/30 transition-colors hover:bg-zinc-800/20 ${idx === 0 && sortKey === "timestamp" && !sortAsc ? "animate-fade-in" : ""}`}
                 >
                   <td className="num px-3 py-2 text-xs text-zinc-400">
