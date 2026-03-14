@@ -192,7 +192,8 @@ export function EquityCurve({
         .then((d) => {
           // Use the simulation_mode field from the backend response
           const serverMode = d?.simulation_mode || "simple";
-          setDebugInfo(`req: ${m} | srv: ${serverMode} | keys: ${Object.keys(d).join(",")}`);
+          const debugQuery = d?._debug_query || "n/a";
+          setDebugInfo(`req: ${m} | srv: ${serverMode} | q: ${debugQuery}`);
 
           if (serverMode === "both" && d.simple && d.realistic) {
             setSimpleData(d.simple as EquityData);

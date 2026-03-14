@@ -278,4 +278,5 @@ async def get_equity(
 
     out = _result_to_dict(result)
     out["simulation_mode"] = simulation_mode
+    out["_debug_query"] = str(request.query_params)
     return out
