@@ -343,7 +343,15 @@ export function Chart({ bars, signals, labeling }: ChartProps) {
 
     const firstTimestamp = sortedBars[0]?.timestamp ?? 0;
 
-    const markers: SeriesMarker<Time>[] = signals
+    // Deduplicate signals by id (REST + WebSocket can deliver the same signal)
+    const seen = new Set<number>();
+    const uniqueSignals = signals.filter((s) => {
+      if (seen.has(s.id)) return false;
+      seen.add(s.id);
+      return true;
+    });
+
+    const markers: SeriesMarker<Time>[] = uniqueSignals
       .filter((s) => s.timestamp >= firstTimestamp)
       .sort((a, b) => a.timestamp - b.timestamp)
       .map((signal) => ({
