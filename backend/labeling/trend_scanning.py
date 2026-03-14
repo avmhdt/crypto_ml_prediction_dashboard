@@ -4,8 +4,8 @@ For each bar, run OLS regression of close prices over multiple candidate
 forward horizons.  Select the horizon with the maximum |t-value| of the
 slope coefficient.  The label is ``sign(slope)`` at the selected horizon.
 
-Labels are {-1, 1, NaN}. Zero-slope/zero-return bars produce NaN
-(excluded from training) to avoid systematic LONG bias.
+Labels are {-1, 1, NaN}. Bars where no horizon produces a t-value
+above the minimum threshold are labeled NaN (excluded from training).
 """
 
 from __future__ import annotations
@@ -63,6 +63,7 @@ def _ols_t_value(y: np.ndarray) -> tuple[float, float]:
 def trend_scanning_labels(
     bars: pd.DataFrame,
     horizons: list[int] | None = None,
+    min_t_value: float = 1.0,
 ) -> pd.DataFrame:
     """Apply the trend-scanning labeling method.
 
@@ -74,12 +75,18 @@ def trend_scanning_labels(
     horizons : list[int], optional
         Forward-looking window lengths to evaluate.
         Defaults to ``[5, 10, 20, 40, 80]``.
+    min_t_value : float, optional
+        Minimum absolute t-value required to assign a directional label.
+        If the best horizon's ``|t-value|`` is below this threshold, the
+        label is NaN (excluded from training).  Default ``1.0`` (slope
+        must be at least 1 standard error from zero).
 
     Returns
     -------
     pd.DataFrame
         Columns: ``[timestamp, label, best_horizon, t_value]``.
-        ``label`` is in {-1, 1, NaN}. NaN for zero-slope/return bars.
+        ``label`` is in {-1, 1, NaN}. NaN when no horizon produces a
+        statistically meaningful trend.
     """
     if horizons is None:
         horizons = [5, 10, 20, 40, 80]
@@ -116,24 +123,12 @@ def trend_scanning_labels(
                 best_t = t_val
                 best_h = h
 
-        # Determine label from the best slope / t-value.
-        if best_slope > 0:
-            label = 1
-        elif best_slope < 0:
-            label = -1
+        # Determine label: require |t-value| >= min_t_value for a
+        # directional label.  Below threshold = no meaningful trend.
+        if best_abs_t >= min_t_value:
+            label = 1 if best_slope > 0 else -1
         else:
-            # Slope is exactly zero: fallback to raw return over the best
-            # horizon.
-            end = min(i + best_h, n - 1)
-            raw_ret = close[end] - close[i]
-            if raw_ret > 0:
-                label = 1
-            elif raw_ret < 0:
-                label = -1
-            else:
-                # Perfectly flat: no directional information — exclude
-                # from training to avoid systematic LONG bias.
-                label = np.nan
+            label = np.nan
 
         labels[i] = label
         best_horizons[i] = best_h
