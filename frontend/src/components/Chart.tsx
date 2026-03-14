@@ -32,6 +32,7 @@ export function Chart({ bars, signals, labeling }: ChartProps) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const volumeRef = useRef<ISeriesApi<any> | null>(null);
   const markersPluginRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
+  const markerFrameRef = useRef<number>(0);
   const barrierLinesRef = useRef<IPriceLine[]>([]);
   const verticalBarrierRef = useRef<HTMLDivElement | null>(null);
   const rangeHandlerRef = useRef<(() => void) | null>(null);
@@ -317,8 +318,11 @@ export function Chart({ bars, signals, labeling }: ChartProps) {
     [sortedBars],
   );
 
-  // Update signal markers
+  // Update signal markers — deferred to next frame so the chart has time to
+  // process any concurrent setData() call from the data-update effect above.
   useEffect(() => {
+    cancelAnimationFrame(markerFrameRef.current);
+
     if (!markersPluginRef.current) return;
 
     if (barTimesSeconds.length === 0) {
@@ -360,7 +364,12 @@ export function Chart({ bars, signals, labeling }: ChartProps) {
         text: `${signal.side === 1 ? "LONG" : "SHORT"} ${signal.size.toFixed(2)}`,
       }));
 
-    markersPluginRef.current.setMarkers(markers);
+    // Defer so lightweight-charts finishes indexing new data from setData()
+    markerFrameRef.current = requestAnimationFrame(() => {
+      markersPluginRef.current?.setMarkers(markers);
+    });
+
+    return () => cancelAnimationFrame(markerFrameRef.current);
   }, [sortedBars, signals, barTimesSeconds]);
 
   // Handle click for barrier visualization (triple_barrier only)
