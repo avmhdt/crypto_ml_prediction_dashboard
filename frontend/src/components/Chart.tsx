@@ -311,14 +311,35 @@ export function Chart({ bars, signals, labeling }: ChartProps) {
     volumeRef.current.setData(volumeData);
   }, [sortedBars, clearBarriers]);
 
+  // Build sorted array of bar timestamps (seconds) for snapping signal markers
+  const barTimesSeconds = useMemo(
+    () => sortedBars.map((b) => b.timestamp / 1000),
+    [sortedBars],
+  );
+
   // Update signal markers
   useEffect(() => {
     if (!markersPluginRef.current) return;
 
-    if (sortedBars.length === 0) {
+    if (barTimesSeconds.length === 0) {
       markersPluginRef.current.setMarkers([]);
       return;
     }
+
+    // Binary-search helper: find the bar time closest to `target`
+    const snapToBar = (target: number): number => {
+      const arr = barTimesSeconds;
+      let lo = 0;
+      let hi = arr.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (arr[mid] < target) lo = mid + 1;
+        else hi = mid;
+      }
+      // lo is the first element >= target; compare with lo-1 to pick closer
+      if (lo > 0 && target - arr[lo - 1] <= arr[lo] - target) lo--;
+      return arr[lo];
+    };
 
     const firstTimestamp = sortedBars[0]?.timestamp ?? 0;
 
@@ -326,7 +347,7 @@ export function Chart({ bars, signals, labeling }: ChartProps) {
       .filter((s) => s.timestamp >= firstTimestamp)
       .sort((a, b) => a.timestamp - b.timestamp)
       .map((signal) => ({
-        time: (signal.timestamp / 1000) as Time,
+        time: snapToBar(signal.timestamp / 1000) as Time,
         position:
           signal.side === 1
             ? ("belowBar" as const)
@@ -340,7 +361,7 @@ export function Chart({ bars, signals, labeling }: ChartProps) {
       }));
 
     markersPluginRef.current.setMarkers(markers);
-  }, [sortedBars, signals]);
+  }, [sortedBars, signals, barTimesSeconds]);
 
   // Handle click for barrier visualization (triple_barrier only)
   useEffect(() => {
