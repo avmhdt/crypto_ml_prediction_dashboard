@@ -20,7 +20,7 @@ from backend.config import (
 from backend.ml.primary_model import PrimaryModel
 from backend.ml.meta_labeling import MetaLabelingModel
 from backend.ml.bet_sizing import (
-    compute_average_exposure, compute_bet_sizes, discretize_exposure,
+    bet_size_from_probability, compute_average_exposure, discretize_exposure,
 )
 
 logger = logging.getLogger(__name__)
@@ -223,9 +223,10 @@ class LivePipeline:
                 if meta_proba < 0.5:
                     continue
 
-                # Bet sizing
+                # Bet sizing — raw continuous size; discretization happens
+                # once after averaging active bets (AFML Ch.10)
                 bet_size = float(
-                    compute_bet_sizes(np.array([meta_proba]))[0]
+                    bet_size_from_probability(np.array([meta_proba]))[0]
                 )
 
                 # Skip zero-size bets
