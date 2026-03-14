@@ -208,15 +208,19 @@ def _run_realistic(
     """Run realistic simulation with decomposed cost model.
 
     Key differences from simple mode:
-    - Uses maker/taker fee distinction based on VIP tier
-    - Applies spread cost, slippage (square-root law), market impact
-    - Tracks funding rate costs for positions crossing funding intervals
-    - Filters signals with lower meta_probability (< 0.5 already filtered upstream)
-    - Uses a fill probability factor to simulate realistic fill rates
+    - Maker/taker fee distinction based on VIP tier (2-5 bps vs flat 10)
+    - Spread cost: half-spread in bps applied to notional
+    - Slippage: square-root market impact law
+    - Funding rate costs deducted on position exit
+    - Fill probability filter: meta_probability^2 models queue rejection
     """
     starting_capital = sim_config.starting_capital
-    cost_model = CostModel(sim_config)
     funding = FundingRateTracker(default_rate=sim_config.default_funding_rate)
+
+    # Pre-compute fee rates as fractions
+    maker_rate = sim_config.maker_fee_bps / 10_000.0
+    taker_rate = sim_config.taker_fee_bps / 10_000.0
+    spread_bps = 2.0  # typical spread for major pairs
 
     ts_out: list[int] = []
     equity_out: list[float] = []
@@ -255,15 +259,13 @@ def _run_realistic(
             if s["entry_price"] is None:
                 s["entry_price"] = bar_close
 
-            # Realistic fill filter: lower meta_probability = lower fill chance
-            # Use meta_probability as a proxy for fill likelihood
+            # Fill probability: use meta_probability^2 to model queue rejection
+            # This gives 60% meta → 36% fill, 70% → 49%, 80% → 64%, 90% → 81%
+            # Much more aggressive filtering than simple linear scaling
             meta_p = s.get("meta_probability", 0.5)
-            fill_prob = min(1.0, meta_p * 1.2)  # Scale slightly
+            fill_prob = meta_p * meta_p
 
-            # Simulate fill based on probability
             if np.random.random() < fill_prob:
-                s["_filled"] = True
-                s["_fill_bar"] = bar_idx
                 active.append(s)
                 total_fills += 1
             else:
@@ -271,7 +273,7 @@ def _run_realistic(
 
             sig_ptr += 1
 
-        # Check exits
+        # Check exits — same barrier logic as simple
         still_active = []
         for pos in active:
             exited = False
@@ -304,16 +306,17 @@ def _run_realistic(
                 if ret > 0:
                     num_wins += 1
 
-                # Compute exit costs (funding for hold duration)
+                # Deduct funding costs on exit
                 hold_ms = bar_ts - pos["timestamp"]
-                notional = abs(pos["size"] * exit_price)
-                funding_cost = funding.compute_funding_cost(
+                exit_notional = abs(pos["size"] * exit_price)
+                fc = funding.compute_funding_cost(
                     entry_ms=pos["timestamp"],
                     exit_ms=bar_ts,
-                    position_notional=notional,
+                    position_notional=exit_notional,
                     side=pos["side"],
                 )
-                total_funding += funding_cost
+                equity -= fc
+                total_funding += fc
                 total_wait_ms += hold_ms
             else:
                 still_active.append(pos)
@@ -321,38 +324,46 @@ def _run_realistic(
         active = still_active
         exposure = compute_average_exposure(active)
 
-        # P&L
+        # P&L from price movement
         if prev_close > 0 and bar_idx > 0:
             bar_return = (bar_close - prev_close) / prev_close
             pnl = prev_exposure * equity * bar_return
             equity += pnl
 
-        # Realistic costs on position change
+        # Realistic costs on position change (decomposed)
         delta = abs(exposure - prev_exposure)
         if delta > 1e-9:
-            notional = delta * equity
-            # Determine maker vs taker (assume maker for limit orders)
-            order_type = "maker"
+            notional = delta * abs(equity)
+
+            # 1. Exchange fee (maker for limit orders)
+            fee = notional * maker_rate
+            total_exchange_fee += fee
             total_maker += 1
 
-            costs = cost_model.compute_total(
-                notional=notional,
-                order_type=order_type,
-                spread=bar_close * 0.0002,  # ~2 bps spread estimate
-                order_size_usd=notional,
-                adv_usd=_DEFAULT_ADV_USD,
-                volatility=_DEFAULT_VOLATILITY,
-            )
+            # 2. Spread cost: half-spread in bps applied to notional
+            spread_cost = notional * (spread_bps / 10_000.0) / 2.0
+            total_spread += spread_cost
 
-            equity -= costs.total
-            total_exchange_fee += costs.exchange_fee
-            total_spread += costs.spread_cost
-            total_slippage += costs.slippage
-            total_impact += costs.market_impact
+            # 3. Slippage: square-root impact I(Q) = Y * sigma * sqrt(Q/V)
+            if notional > 0 and _DEFAULT_ADV_USD > 0:
+                slippage = (sim_config.slippage_Y * _DEFAULT_VOLATILITY
+                            * (notional / _DEFAULT_ADV_USD) ** 0.5
+                            * notional)
+            else:
+                slippage = 0.0
+            total_slippage += slippage
+
+            # 4. Market impact (0.1x slippage for small orders)
+            impact = 0.1 * slippage
+            total_impact += impact
+
+            # Total cost deducted from equity
+            total_cost_this_bar = fee + spread_cost + slippage + impact
+            equity -= total_cost_this_bar
 
         peak = max(peak, equity)
         dd = (equity - peak) / peak if peak > 0 else 0.0
-        invested = abs(exposure) * equity
+        invested = abs(exposure) * abs(equity)
 
         ts_out.append(bar_ts)
         equity_out.append(round(equity, 2))
@@ -368,7 +379,7 @@ def _run_realistic(
     total_signals = total_fills + num_unfilled
     fill_rate = total_fills / total_signals * 100 if total_signals > 0 else 0.0
     total_cost = total_exchange_fee + total_funding + total_spread + total_slippage + total_impact
-    avg_slippage_bps = (total_slippage / equity * 10000) if equity > 0 else 0.0
+    avg_slippage_bps = (total_slippage / max(starting_capital, 1) * 10000)
     maker_ratio = total_maker / max(1, total_fills) * 100
     avg_wait = total_wait_ms / max(1, num_completed)
 
