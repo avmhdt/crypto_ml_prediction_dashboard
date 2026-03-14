@@ -21,39 +21,37 @@ import numpy as np
 # 1.  Concurrency matrix (internal helper)
 # ---------------------------------------------------------------------------
 
-def compute_concurrency_matrix(
+def _bar_concurrency(
     label_spans: list[tuple[int, int]],
     num_bars: int,
 ) -> np.ndarray:
-    """Build a binary concurrency matrix C of shape (num_labels, num_bars).
+    """Compute per-bar concurrency count c_t using an O(n) sweep.
 
-    ``C[i, t] = 1`` iff label *i* is active at bar *t*, i.e. ``start_i <= t < end_i``.
-
-    This is the foundation for the average-uniqueness weights described in
-    AFML Ch. 4, Sec. 4.1 ("The Sequential Bootstrap").
+    ``c_t`` is the number of labels active at bar *t*.  Instead of
+    materializing a full ``(num_labels, num_bars)`` matrix (which is
+    370 GB for 222K labels), we use a difference-array approach that
+    needs only ``O(num_bars)`` memory.
 
     Parameters
     ----------
     label_spans : list[tuple[int, int]]
-        Each element ``(start, end)`` gives the half-open bar range ``[start, end)``
-        during which label *i* is active.
+        Half-open bar ranges ``[start, end)`` for each label.
     num_bars : int
-        Total number of bars in the dataset (columns of the matrix).
+        Total number of bars.
 
     Returns
     -------
     np.ndarray
-        Binary matrix of shape ``(len(label_spans), num_bars)`` with dtype float64.
+        Array of shape ``(num_bars,)`` — concurrency count at each bar.
     """
-    num_labels = len(label_spans)
-    concurrency = np.zeros((num_labels, num_bars), dtype=np.float64)
-    for i, (start, end) in enumerate(label_spans):
-        # Clip to valid bar range
+    diff = np.zeros(num_bars + 1, dtype=np.int64)
+    for start, end in label_spans:
         s = max(start, 0)
         e = min(end, num_bars)
         if s < e:
-            concurrency[i, s:e] = 1.0
-    return concurrency
+            diff[s] += 1
+            diff[e] -= 1
+    return np.cumsum(diff[:num_bars])
 
 
 # ---------------------------------------------------------------------------
@@ -66,13 +64,9 @@ def compute_uniqueness_weights(
 ) -> np.ndarray:
     """Compute average-uniqueness weights (AFML Ch. 4, Eq. 4.10).
 
-    For each bar *t*, the concurrency ``c_t`` is the number of labels active at
-    that bar.  The uniqueness of label *i* at bar *t* is ``1 / c_t``.  The
-    *average uniqueness* of label *i* is the mean of ``1 / c_t`` over all bars
-    where label *i* is active.
-
-    A label that does not overlap with any other label has uniqueness 1; a
-    label that perfectly overlaps *k* other labels has uniqueness ``1/k``.
+    Uses O(num_bars) memory instead of O(num_labels * num_bars) by
+    computing per-bar concurrency with a sweep, then iterating each
+    label's span to compute its average uniqueness.
 
     Parameters
     ----------
@@ -85,29 +79,29 @@ def compute_uniqueness_weights(
     -------
     np.ndarray
         Array of shape ``(num_labels,)`` with average-uniqueness weights.
-        Labels with empty spans receive a weight of 0.
     """
-    concurrency = compute_concurrency_matrix(label_spans, num_bars)
+    # Step 1: O(num_bars) concurrency counts
+    c_t = _bar_concurrency(label_spans, num_bars).astype(np.float64)
 
-    # c_t = total concurrency at each bar (shape: num_bars)
-    c_t = concurrency.sum(axis=0)  # (num_bars,)
-
-    # Avoid division by zero: where c_t == 0 no label is active, so the
-    # reciprocal doesn't matter (those bars are never referenced).
-    inv_c = np.zeros_like(c_t)
+    # Precompute 1/c_t (avoid division in the loop)
+    inv_c = np.zeros(num_bars, dtype=np.float64)
     mask = c_t > 0
     inv_c[mask] = 1.0 / c_t[mask]
 
-    # For each label i: mean of inv_c over bars where concurrency[i, t] == 1
-    # Numerator: sum of (1/c_t) for active bars of label i
-    numerator = concurrency @ inv_c  # (num_labels,)
+    # Step 2: For each label, average 1/c_t over its span — O(total_span_length)
+    num_labels = len(label_spans)
+    weights = np.zeros(num_labels, dtype=np.float64)
 
-    # Denominator: number of active bars for label i
-    span_lengths = concurrency.sum(axis=1)  # (num_labels,)
+    # Use prefix sums for O(1) per label instead of O(span_length)
+    inv_c_cumsum = np.zeros(num_bars + 1, dtype=np.float64)
+    inv_c_cumsum[1:] = np.cumsum(inv_c)
 
-    weights = np.zeros(len(label_spans), dtype=np.float64)
-    valid = span_lengths > 0
-    weights[valid] = numerator[valid] / span_lengths[valid]
+    for i, (start, end) in enumerate(label_spans):
+        s = max(start, 0)
+        e = min(end, num_bars)
+        span_len = e - s
+        if span_len > 0:
+            weights[i] = (inv_c_cumsum[e] - inv_c_cumsum[s]) / span_len
 
     return weights
 
