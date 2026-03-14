@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useMemo } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   createChart,
   AreaSeries,
@@ -168,46 +168,54 @@ export function EquityCurve({
 
   const mode = simulationConfig.mode;
 
-  // Build the fetch URL based on mode
-  const fetchUrl = useMemo(() => {
-    const base = `/api/equity/${symbol}?bar_type=${barType}&labeling=${labeling}&starting_capital=${simulationConfig.starting_capital}&fees_bps=${simulationConfig.fees_bps}`;
-    if (mode === "simple") return base + "&simulation_mode=simple";
-    const realisticParams = `&simulation_mode=${mode}&vip_tier=${simulationConfig.vip_tier}&bnb_discount=${simulationConfig.bnb_discount}&urgency=${simulationConfig.urgency}`;
-    return base + realisticParams;
-  }, [symbol, barType, labeling, simulationConfig, mode]);
-
-  // Fetch equity data (debounced)
+  // Fetch equity data (debounced) — URL computed inline to avoid memo staleness
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
 
+    // Build URL inline (not memoized) to guarantee fresh mode
+    const currentMode = simulationConfig.mode;
+    const base = `/api/equity/${symbol}?bar_type=${barType}&labeling=${labeling}&starting_capital=${simulationConfig.starting_capital}&fees_bps=${simulationConfig.fees_bps}`;
+    let url: string;
+    if (currentMode === "simple") {
+      url = base + "&simulation_mode=simple";
+    } else {
+      url = base + `&simulation_mode=${currentMode}&vip_tier=${simulationConfig.vip_tier}&bnb_discount=${simulationConfig.bnb_discount}&urgency=${simulationConfig.urgency}`;
+    }
+
+    console.log(`[EquityCurve] fetching mode=${currentMode}`, url);
+
     const timer = setTimeout(() => {
-      fetch(fetchUrl, { signal: controller.signal })
+      fetch(url, { signal: controller.signal })
         .then((r) => {
           if (!r.ok) throw new Error(`HTTP ${r.status}`);
           return r.json();
         })
         .then((d) => {
-          if (mode === "both" && d && d.simple && d.realistic) {
-            // Response shape: { simple: EquityData, realistic: EquityData }
+          console.log(`[EquityCurve] response mode=${currentMode} keys=${Object.keys(d)}`);
+          // Detect response shape from the data itself, not from mode variable
+          if (d && d.simple && d.realistic) {
+            // "both" response: { simple: EquityData, realistic: EquityData }
             setSimpleData(d.simple as EquityData);
             setRealisticData(d.realistic as EquityData & { metrics: RealisticMetrics });
-          } else if (mode === "both" && d && d.timestamps) {
-            // Fallback: server returned single EquityData instead of comparison
-            setSimpleData(d as EquityData);
-            setRealisticData(null);
-          } else if (mode === "realistic") {
+          } else if (d && d.timestamps && d.metrics && d.metrics.cost_breakdown) {
+            // "realistic" response: EquityData with RealisticMetrics
             setSimpleData(null);
             setRealisticData(d as EquityData & { metrics: RealisticMetrics });
-          } else {
+          } else if (d && d.timestamps) {
+            // "simple" response: plain EquityData
             setSimpleData(d as EquityData);
+            setRealisticData(null);
+          } else {
+            console.error("[EquityCurve] unexpected response shape:", d);
+            setSimpleData(null);
             setRealisticData(null);
           }
           setLoading(false);
         })
         .catch((e) => {
           if (e.name !== "AbortError") {
-            console.error("Equity fetch error:", e);
+            console.error("[EquityCurve] fetch error:", e);
             setSimpleData(null);
             setRealisticData(null);
             setLoading(false);
@@ -219,7 +227,8 @@ export function EquityCurve({
       clearTimeout(timer);
       controller.abort();
     };
-  }, [fetchUrl, mode]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [symbol, barType, labeling, simulationConfig]);
 
   // Initialize charts
   useEffect(() => {
