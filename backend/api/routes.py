@@ -139,9 +139,7 @@ async def seed_signals(request: Request, symbol: str, bar_type: str = "time"):
         meta_prob = round(float(np.random.uniform(0.45, 0.95)), 4)
         if meta_prob < 0.5:
             continue
-        size = float(np.random.choice(
-            [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
-            p=[0.05, 0.05, 0.1, 0.1, 0.15, 0.15, 0.15, 0.1, 0.1, 0.05]))
+        size = float(2 * meta_prob - 1)  # raw continuous size from probability
         sl = float(row["close"]) - side * vol * 2.0
         pt = float(row["close"]) + side * vol * 2.0
         tb = int(row["timestamp"]) + 50 * 60000

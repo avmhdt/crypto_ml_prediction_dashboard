@@ -24,7 +24,7 @@ from backend.features import compute_all_features
 from backend.ml.purged_cv import PurgedKFoldCV
 from backend.ml.primary_model import PrimaryModel
 from backend.ml.meta_labeling import MetaLabelingModel
-from backend.ml.bet_sizing import compute_bet_sizes, DISCRETE_LEVELS
+from backend.ml.bet_sizing import bet_size_from_probability
 
 logger = logging.getLogger(__name__)
 
@@ -283,8 +283,8 @@ def train_pipeline(
     )
     logger.info(f"Meta-labeling precision (OOS): {meta_precision:.4f}")
 
-    # Step 7: Compute bet sizes
-    bet_sizes = compute_bet_sizes(meta_probs)
+    # Step 7: Compute bet sizes (raw continuous, no discretization)
+    bet_sizes = bet_size_from_probability(meta_probs)
 
     # Step 8: Save artifacts
     logger.info("Saving model artifacts...")
@@ -312,10 +312,8 @@ def train_pipeline(
         "num_features": features.shape[1],
         "primary_recall": primary_recall,
         "meta_precision": meta_precision,
-        "bet_size_distribution": {
-            str(level): int((bet_sizes == level).sum())
-            for level in DISCRETE_LEVELS
-        },
+        "bet_size_mean": float(bet_sizes.mean()),
+        "bet_size_std": float(bet_sizes.std()),
         "artifacts": {
             "primary": str(models_dir / f"{prefix}_primary.joblib"),
             "secondary": str(models_dir / f"{prefix}_secondary.joblib"),
