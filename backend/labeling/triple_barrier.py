@@ -8,9 +8,9 @@ Computes labels by setting three barriers around each bar's close price:
 The first barrier touched determines the label:
   SL hit  -> -1
   PT hit  ->  1
-  Time exit -> sign(return since entry), NaN only if return is exactly zero
+  Time exit -> NaN (no directional signal; excluded from training)
 
-Labels are {-1, 1, NaN}. NaN only for exactly-zero-return time exits.
+Labels are {-1, 1, NaN}. NaN for all time-barrier exits.
 """
 
 from __future__ import annotations
@@ -64,7 +64,7 @@ def triple_barrier_labels(
     -------
     pd.DataFrame
         Columns: ``[timestamp, label, sl_price, pt_price, time_barrier_ts]``.
-        ``label`` is in {-1, 1, NaN}. NaN for perfectly flat bars.
+        ``label`` is in {-1, 1, NaN}. NaN for all time-barrier exits.
     """
     if config is None:
         config = TripleBarrierConfig()
@@ -116,16 +116,9 @@ def triple_barrier_labels(
                 break
 
         if not hit:
-            # Time barrier reached without SL/PT touch.
-            ret = close[tb_idx] - close[i]
-            if ret > 0:
-                label = 1
-            elif ret < 0:
-                label = -1
-            else:
-                # Exactly zero return at time barrier — no directional
-                # information, exclude from training.
-                label = np.nan
+            # Time barrier reached without SL/PT touch — no clear
+            # directional signal, exclude from training.
+            label = np.nan
 
         labels[i] = label
 
