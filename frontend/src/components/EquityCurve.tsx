@@ -443,43 +443,45 @@ export function EquityCurve({
           <div className="grid grid-cols-6 gap-2 px-4 py-3">
             <MetricCard
               label="Fill Rate"
-              value={(realisticMetrics.fill_rate * 100).toFixed(1)}
+              value={(realisticMetrics.fill_rate ?? 0).toFixed(1)}
               suffix="%"
-              color={realisticMetrics.fill_rate >= 0.9 ? "text-green-400" : realisticMetrics.fill_rate >= 0.7 ? "text-amber-400" : "text-red-400"}
+              color={(realisticMetrics.fill_rate ?? 0) >= 90 ? "text-green-400" : (realisticMetrics.fill_rate ?? 0) >= 70 ? "text-amber-400" : "text-red-400"}
             />
             <MetricCard
               label="Avg Slippage"
-              value={realisticMetrics.avg_slippage_bps.toFixed(2)}
+              value={(realisticMetrics.avg_slippage_bps ?? 0).toFixed(2)}
               suffix=" bps"
-              color={realisticMetrics.avg_slippage_bps <= 2 ? "text-green-400" : realisticMetrics.avg_slippage_bps <= 5 ? "text-amber-400" : "text-red-400"}
+              color={(realisticMetrics.avg_slippage_bps ?? 0) <= 2 ? "text-green-400" : (realisticMetrics.avg_slippage_bps ?? 0) <= 5 ? "text-amber-400" : "text-red-400"}
             />
             <MetricCard
               label="Maker Ratio"
-              value={(realisticMetrics.maker_ratio * 100).toFixed(1)}
+              value={(realisticMetrics.maker_ratio ?? 0).toFixed(1)}
               suffix="%"
-              color={realisticMetrics.maker_ratio >= 0.5 ? "text-green-400" : "text-amber-400"}
+              color={(realisticMetrics.maker_ratio ?? 0) >= 50 ? "text-green-400" : "text-amber-400"}
             />
             <MetricCard
               label="Avg Wait"
-              value={realisticMetrics.avg_queue_wait_ms.toFixed(0)}
+              value={(realisticMetrics.avg_queue_wait_ms ?? 0).toFixed(0)}
               suffix=" ms"
               color="text-zinc-300"
             />
             <MetricCard
               label="Funding Cost"
-              value={`$${realisticMetrics.funding_total.toFixed(2)}`}
-              color={realisticMetrics.funding_total <= 0 ? "text-green-400" : "text-red-400"}
+              value={`$${(realisticMetrics.funding_total ?? 0).toFixed(2)}`}
+              color={(realisticMetrics.funding_total ?? 0) <= 0 ? "text-green-400" : "text-red-400"}
             />
             <MetricCard
               label="Unfilled"
-              value={realisticMetrics.num_unfilled}
-              color={realisticMetrics.num_unfilled === 0 ? "text-green-400" : "text-amber-400"}
+              value={realisticMetrics.num_unfilled ?? 0}
+              color={(realisticMetrics.num_unfilled ?? 0) === 0 ? "text-green-400" : "text-amber-400"}
             />
           </div>
           {/* Cost breakdown bar */}
-          <div className="px-4 pb-3">
-            <CostBreakdownBar breakdown={realisticMetrics.cost_breakdown} />
-          </div>
+          {realisticMetrics.cost_breakdown && (
+            <div className="px-4 pb-3">
+              <CostBreakdownBar breakdown={realisticMetrics.cost_breakdown} />
+            </div>
+          )}
         </div>
       )}
 
