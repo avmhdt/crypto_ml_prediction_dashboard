@@ -52,7 +52,8 @@ export default function DashboardPage() {
   useEffect(() => {
     const controller = new AbortController();
     setBars([]);
-    fetch(`/api/bars/${symbol}/${barType}?limit=5000`, { signal: controller.signal })
+    const BAR_LIMIT = 5000;
+    fetch(`/api/bars/${symbol}/${barType}?limit=${BAR_LIMIT}`, { signal: controller.signal })
       .then((r) => r.json())
       .then((data) => setBars(Array.isArray(data) ? data : []))
       .catch((e) => { if (e.name !== "AbortError") setBars([]); });
@@ -87,7 +88,7 @@ export default function DashboardPage() {
       if (msg.type === "bar" && msg.data.symbol === symbol && msg.data.bar_type === barType) {
         setBars((prev) => {
           const updated = [...prev, msg.data as BarData];
-          return updated.slice(-500);
+          return updated.slice(-5000);
         });
       }
       if (msg.type === "signal") {
