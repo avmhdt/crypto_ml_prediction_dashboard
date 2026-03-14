@@ -5,6 +5,7 @@ import type { Signal } from "@/lib/types";
 
 interface SignalsTableProps {
   signals: Signal[];
+  labeling: string;
 }
 
 type SortKey = keyof Signal;
@@ -46,7 +47,7 @@ function MetaProbBar({ value }: { value: number }) {
   );
 }
 
-export function SignalsTable({ signals }: SignalsTableProps) {
+export function SignalsTable({ signals, labeling }: SignalsTableProps) {
   const [sortKey, setSortKey] = useState<SortKey>("timestamp");
   const [sortAsc, setSortAsc] = useState(false);
 
@@ -84,6 +85,8 @@ export function SignalsTable({ signals }: SignalsTableProps) {
         })
       : "\u2014";
 
+  const isTripleBarrier = labeling === "triple_barrier";
+
   const columns: {
     key: SortKey;
     label: string;
@@ -93,8 +96,12 @@ export function SignalsTable({ signals }: SignalsTableProps) {
     { key: "side", label: "Side" },
     { key: "size", label: "Size", align: "text-right" },
     { key: "entry_price", label: "Entry", align: "text-right" },
-    { key: "sl_price", label: "Stop Loss", align: "text-right" },
-    { key: "pt_price", label: "Take Profit", align: "text-right" },
+    ...(isTripleBarrier
+      ? [
+          { key: "sl_price" as SortKey, label: "Stop Loss", align: "text-right" },
+          { key: "pt_price" as SortKey, label: "Take Profit", align: "text-right" },
+        ]
+      : []),
     { key: "meta_probability", label: "Meta P" },
   ];
 
@@ -168,12 +175,16 @@ export function SignalsTable({ signals }: SignalsTableProps) {
                   <td className="num px-3 py-2 text-right text-xs text-zinc-300">
                     {formatPrice(signal.entry_price)}
                   </td>
-                  <td className="num px-3 py-2 text-right text-xs text-red-400/70">
-                    {formatPrice(signal.sl_price)}
-                  </td>
-                  <td className="num px-3 py-2 text-right text-xs text-green-400/70">
-                    {formatPrice(signal.pt_price)}
-                  </td>
+                  {isTripleBarrier && (
+                    <td className="num px-3 py-2 text-right text-xs text-red-400/70">
+                      {formatPrice(signal.sl_price)}
+                    </td>
+                  )}
+                  {isTripleBarrier && (
+                    <td className="num px-3 py-2 text-right text-xs text-green-400/70">
+                      {formatPrice(signal.pt_price)}
+                    </td>
+                  )}
                   <td className="px-3 py-2">
                     <MetaProbBar value={signal.meta_probability} />
                   </td>
