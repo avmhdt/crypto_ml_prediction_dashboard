@@ -271,8 +271,11 @@ async def get_equity(
 
     if simulation_mode == "both":
         return {
+            "simulation_mode": "both",
             "simple": _result_to_dict(result["simple"]),
             "realistic": _result_to_dict(result["realistic"]),
         }
 
-    return _result_to_dict(result)
+    out = _result_to_dict(result)
+    out["simulation_mode"] = simulation_mode
+    return out

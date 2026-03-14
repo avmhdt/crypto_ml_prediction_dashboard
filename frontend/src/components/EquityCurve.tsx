@@ -165,25 +165,23 @@ export function EquityCurve({
   const [simpleData, setSimpleData] = useState<EquityData | null>(null);
   const [realisticData, setRealisticData] = useState<(EquityData & { metrics: RealisticMetrics }) | null>(null);
   const [loading, setLoading] = useState(false);
+  const [debugInfo, setDebugInfo] = useState("");
 
   const mode = simulationConfig.mode;
 
-  // Fetch equity data (debounced) — URL computed inline to avoid memo staleness
+  // Fetch equity data (debounced)
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
 
-    // Build URL inline (not memoized) to guarantee fresh mode
-    const currentMode = simulationConfig.mode;
+    // Build URL inline
+    const m = simulationConfig.mode;
     const base = `/api/equity/${symbol}?bar_type=${barType}&labeling=${labeling}&starting_capital=${simulationConfig.starting_capital}&fees_bps=${simulationConfig.fees_bps}`;
-    let url: string;
-    if (currentMode === "simple") {
-      url = base + "&simulation_mode=simple";
-    } else {
-      url = base + `&simulation_mode=${currentMode}&vip_tier=${simulationConfig.vip_tier}&bnb_discount=${simulationConfig.bnb_discount}&urgency=${simulationConfig.urgency}`;
-    }
+    const url = m === "simple"
+      ? base + "&simulation_mode=simple"
+      : base + `&simulation_mode=${m}&vip_tier=${simulationConfig.vip_tier}&bnb_discount=${simulationConfig.bnb_discount}&urgency=${simulationConfig.urgency}`;
 
-    console.log(`[EquityCurve] fetching mode=${currentMode}`, url);
+    setDebugInfo(`req: ${m}`);
 
     const timer = setTimeout(() => {
       fetch(url, { signal: controller.signal })
@@ -192,30 +190,26 @@ export function EquityCurve({
           return r.json();
         })
         .then((d) => {
-          console.log(`[EquityCurve] response mode=${currentMode} keys=${Object.keys(d)}`);
-          // Detect response shape from the data itself, not from mode variable
-          if (d && d.simple && d.realistic) {
-            // "both" response: { simple: EquityData, realistic: EquityData }
+          // Use the simulation_mode field from the backend response
+          const serverMode = d?.simulation_mode || "simple";
+          setDebugInfo(`req: ${m} | srv: ${serverMode} | keys: ${Object.keys(d).join(",")}`);
+
+          if (serverMode === "both" && d.simple && d.realistic) {
             setSimpleData(d.simple as EquityData);
             setRealisticData(d.realistic as EquityData & { metrics: RealisticMetrics });
-          } else if (d && d.timestamps && d.metrics && d.metrics.cost_breakdown) {
-            // "realistic" response: EquityData with RealisticMetrics
+          } else if (serverMode === "realistic") {
             setSimpleData(null);
             setRealisticData(d as EquityData & { metrics: RealisticMetrics });
-          } else if (d && d.timestamps) {
-            // "simple" response: plain EquityData
-            setSimpleData(d as EquityData);
-            setRealisticData(null);
           } else {
-            console.error("[EquityCurve] unexpected response shape:", d);
-            setSimpleData(null);
+            // simple or fallback
+            setSimpleData(d as EquityData);
             setRealisticData(null);
           }
           setLoading(false);
         })
         .catch((e) => {
           if (e.name !== "AbortError") {
-            console.error("[EquityCurve] fetch error:", e);
+            setDebugInfo(`req: ${m} | ERROR: ${e.message}`);
             setSimpleData(null);
             setRealisticData(null);
             setLoading(false);
@@ -399,6 +393,9 @@ export function EquityCurve({
       <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-2">
         <div className="flex items-center gap-3">
           <span className="text-xs font-medium text-zinc-400">Equity Curve</span>
+          {debugInfo && (
+            <span className="text-[9px] font-mono text-amber-500/70">{debugInfo}</span>
+          )}
           {loading && (
             <span className="text-[10px] text-zinc-600 animate-pulse">simulating...</span>
           )}
