@@ -8,7 +8,17 @@ import { SignalsTable } from "@/components/SignalsTable";
 import { MetricsPanel } from "@/components/MetricsPanel";
 import { EquityCurve } from "@/components/EquityCurve";
 import { useWebSocket } from "@/hooks/useWebSocket";
-import type { BarData, Signal, Metrics, DashboardConfig, WSMessage } from "@/lib/types";
+import type { BarData, Signal, Metrics, DashboardConfig, WSMessage, SimulationConfig } from "@/lib/types";
+
+const DEFAULT_SIMULATION: SimulationConfig = {
+  mode: "simple",
+  starting_capital: 10000,
+  fees_bps: 10,
+  vip_tier: 0,
+  bnb_discount: false,
+  urgency: 0.5,
+  order_timeout_ms: 5000,
+};
 
 const DEFAULT_CONFIG: DashboardConfig = {
   symbols: ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "BNBUSDT"],
@@ -28,6 +38,7 @@ export default function DashboardPage() {
   const [bars, setBars] = useState<BarData[]>([]);
   const [signals, setSignals] = useState<Signal[]>([]);
   const [metrics, setMetrics] = useState<Metrics | null>(null);
+  const [simulationConfig, setSimulationConfig] = useState<SimulationConfig>(DEFAULT_SIMULATION);
 
   // Fetch config on mount
   useEffect(() => {
@@ -116,7 +127,13 @@ export default function DashboardPage() {
         <Chart bars={bars} signals={signals} labeling={labeling} />
 
         {/* Equity curve simulation */}
-        <EquityCurve symbol={symbol} barType={barType} labeling={labeling} />
+        <EquityCurve
+          symbol={symbol}
+          barType={barType}
+          labeling={labeling}
+          simulationConfig={simulationConfig}
+          onSimulationConfigChange={setSimulationConfig}
+        />
 
         {/* Signals table */}
         <SignalsTable signals={signals} />
