@@ -32,7 +32,6 @@ export function Chart({ bars, signals, labeling }: ChartProps) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const volumeRef = useRef<ISeriesApi<any> | null>(null);
   const markersPluginRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
-  const markerFrameRef = useRef<number>(0);
   const barrierLinesRef = useRef<IPriceLine[]>([]);
   const verticalBarrierRef = useRef<HTMLDivElement | null>(null);
   const rangeHandlerRef = useRef<(() => void) | null>(null);
@@ -255,10 +254,6 @@ export function Chart({ bars, signals, labeling }: ChartProps) {
       scaleMargins: { top: 0.8, bottom: 0 },
     });
 
-    // Create markers plugin (v5 API)
-    const markersPlugin = createSeriesMarkers(candlestickSeries, []);
-    markersPluginRef.current = markersPlugin;
-
     chartRef.current = chart;
     candlestickRef.current = candlestickSeries;
     volumeRef.current = volumeSeries;
@@ -272,7 +267,10 @@ export function Chart({ bars, signals, labeling }: ChartProps) {
 
     return () => {
       resizeObserver.disconnect();
-      markersPlugin.detach();
+      if (markersPluginRef.current) {
+        markersPluginRef.current.detach();
+        markersPluginRef.current = null;
+      }
       chart.remove();
       chartRef.current = null;
       candlestickRef.current = null;
@@ -282,18 +280,29 @@ export function Chart({ bars, signals, labeling }: ChartProps) {
     };
   }, []);
 
-  // Update candlestick and volume data
+  // Build sorted array of bar timestamps (seconds) for snapping signal markers
+  const barTimesSeconds = useMemo(
+    () => sortedBars.map((b) => b.timestamp / 1000),
+    [sortedBars],
+  );
+
+  // Combined data + markers update — atomic effect ensures the markers plugin
+  // always operates on fresh series data (no stale internal state).
   useEffect(() => {
-    if (!candlestickRef.current || !volumeRef.current) return;
+    const series = candlestickRef.current;
+    if (!series || !volumeRef.current) return;
 
     if (sortedBars.length === 0) {
-      // Clear chart when switching to a symbol/bar_type with no data
-      candlestickRef.current.setData([]);
+      series.setData([]);
       volumeRef.current.setData([]);
+      if (markersPluginRef.current) {
+        markersPluginRef.current.setMarkers([]);
+      }
       clearBarriers();
       return;
     }
 
+    // 1. Update candlestick + volume data
     const candleData: CandlestickData<Time>[] = sortedBars.map((bar) => ({
       time: (bar.timestamp / 1000) as Time,
       open: bar.open,
@@ -308,26 +317,12 @@ export function Chart({ bars, signals, labeling }: ChartProps) {
       color: bar.close >= bar.open ? "#22c55e20" : "#ef444420",
     }));
 
-    candlestickRef.current.setData(candleData);
+    series.setData(candleData);
     volumeRef.current.setData(volumeData);
-  }, [sortedBars, clearBarriers]);
 
-  // Build sorted array of bar timestamps (seconds) for snapping signal markers
-  const barTimesSeconds = useMemo(
-    () => sortedBars.map((b) => b.timestamp / 1000),
-    [sortedBars],
-  );
-
-  // Update signal markers — deferred to next frame so the chart has time to
-  // process any concurrent setData() call from the data-update effect above.
-  useEffect(() => {
-    cancelAnimationFrame(markerFrameRef.current);
-
-    if (!markersPluginRef.current) return;
-
-    if (barTimesSeconds.length === 0) {
-      markersPluginRef.current.setMarkers([]);
-      return;
+    // 2. Re-create markers plugin so it indexes against the fresh series data
+    if (markersPluginRef.current) {
+      markersPluginRef.current.detach();
     }
 
     // Binary-search helper: find the bar time closest to `target`
@@ -340,7 +335,6 @@ export function Chart({ bars, signals, labeling }: ChartProps) {
         if (arr[mid] < target) lo = mid + 1;
         else hi = mid;
       }
-      // lo is the first element >= target; compare with lo-1 to pick closer
       if (lo > 0 && target - arr[lo - 1] <= arr[lo] - target) lo--;
       return arr[lo];
     };
@@ -364,13 +358,8 @@ export function Chart({ bars, signals, labeling }: ChartProps) {
         text: `${signal.side === 1 ? "LONG" : "SHORT"} ${signal.size.toFixed(2)}`,
       }));
 
-    // Defer so lightweight-charts finishes indexing new data from setData()
-    markerFrameRef.current = requestAnimationFrame(() => {
-      markersPluginRef.current?.setMarkers(markers);
-    });
-
-    return () => cancelAnimationFrame(markerFrameRef.current);
-  }, [sortedBars, signals, barTimesSeconds]);
+    markersPluginRef.current = createSeriesMarkers(series, markers);
+  }, [sortedBars, signals, barTimesSeconds, clearBarriers]);
 
   // Handle click for barrier visualization (triple_barrier only)
   useEffect(() => {
