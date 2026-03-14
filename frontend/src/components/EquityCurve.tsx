@@ -165,7 +165,6 @@ export function EquityCurve({
   const [simpleData, setSimpleData] = useState<EquityData | null>(null);
   const [realisticData, setRealisticData] = useState<(EquityData & { metrics: RealisticMetrics }) | null>(null);
   const [loading, setLoading] = useState(false);
-  const [debugInfo, setDebugInfo] = useState("");
 
   const mode = simulationConfig.mode;
 
@@ -181,8 +180,6 @@ export function EquityCurve({
       ? base + "&simulation_mode=simple"
       : base + `&simulation_mode=${m}&vip_tier=${simulationConfig.vip_tier}&bnb_discount=${simulationConfig.bnb_discount}&urgency=${simulationConfig.urgency}`;
 
-    setDebugInfo(`req: ${m}`);
-
     const timer = setTimeout(() => {
       fetch(url, { signal: controller.signal })
         .then((r) => {
@@ -192,8 +189,6 @@ export function EquityCurve({
         .then((d) => {
           // Use the simulation_mode field from the backend response
           const serverMode = d?.simulation_mode || "simple";
-          const debugQuery = d?._debug_query || "n/a";
-          setDebugInfo(`req: ${m} | srv: ${serverMode} | q: ${debugQuery}`);
 
           if (serverMode === "both" && d.simple && d.realistic) {
             setSimpleData(d.simple as EquityData);
@@ -210,7 +205,7 @@ export function EquityCurve({
         })
         .catch((e) => {
           if (e.name !== "AbortError") {
-            setDebugInfo(`req: ${m} | ERROR: ${e.message}`);
+            console.error("[EquityCurve] fetch error:", e);
             setSimpleData(null);
             setRealisticData(null);
             setLoading(false);
@@ -394,9 +389,6 @@ export function EquityCurve({
       <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-2">
         <div className="flex items-center gap-3">
           <span className="text-xs font-medium text-zinc-400">Equity Curve</span>
-          {debugInfo && (
-            <span className="text-[9px] font-mono text-amber-500/70">{debugInfo}</span>
-          )}
           {loading && (
             <span className="text-[10px] text-zinc-600 animate-pulse">simulating...</span>
           )}
