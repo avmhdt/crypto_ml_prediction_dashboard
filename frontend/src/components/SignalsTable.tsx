@@ -170,7 +170,7 @@ export function SignalsTable({ signals, labeling }: SignalsTableProps) {
                     <SideBadge side={signal.side} />
                   </td>
                   <td className="num px-3 py-2 text-right text-xs text-zinc-300">
-                    {signal.size.toFixed(3)}
+                    {signal.size.toFixed(2)}
                   </td>
                   <td className="num px-3 py-2 text-right text-xs text-zinc-300">
                     {formatPrice(signal.entry_price)}
