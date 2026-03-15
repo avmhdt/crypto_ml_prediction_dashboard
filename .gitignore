@@ -12,12 +12,12 @@ venv/
 .venv/
 env/
 
-# ML artifacts
-models/*.joblib
-models/*.pkl
-backend/models/*.joblib
-backend/models/*.json
-backend/models/*.pkl
+# ML artifacts (tracked — model files are committed)
+# models/*.joblib
+# models/*.pkl
+# backend/models/*.joblib
+# backend/models/*.json
+# backend/models/*.pkl
 *.h5
 *.onnx
 
