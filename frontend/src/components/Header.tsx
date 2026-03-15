@@ -2,12 +2,16 @@
 
 import { useState, useEffect } from "react";
 
+import type { ViewMode } from "@/lib/types";
+
 interface HeaderProps {
   connected: boolean;
   symbol: string;
+  viewMode: ViewMode;
+  onViewModeChange: (mode: ViewMode) => void;
 }
 
-export function Header({ connected, symbol }: HeaderProps) {
+export function Header({ connected, symbol, viewMode, onViewModeChange }: HeaderProps) {
   const [time, setTime] = useState("");
 
   useEffect(() => {
@@ -58,6 +62,23 @@ export function Header({ connected, symbol }: HeaderProps) {
             Active
           </span>
           <span className="num text-sm font-semibold text-white">{symbol}</span>
+        </div>
+
+        {/* View mode toggle */}
+        <div className="flex items-center rounded-lg border border-zinc-700/50 bg-zinc-800/50 p-0.5">
+          {(["live", "walk-forward"] as ViewMode[]).map((mode) => (
+            <button
+              key={mode}
+              onClick={() => onViewModeChange(mode)}
+              className={`rounded-md px-3 py-1 text-[11px] font-medium transition-all ${
+                viewMode === mode
+                  ? "bg-blue-600 text-white shadow-sm shadow-blue-500/20"
+                  : "text-zinc-400 hover:text-zinc-200"
+              }`}
+            >
+              {mode === "live" ? "Live" : "Walk-Forward"}
+            </button>
+          ))}
         </div>
 
         {/* Live clock */}

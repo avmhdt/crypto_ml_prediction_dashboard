@@ -114,3 +114,52 @@ export interface EquityComparisonData {
   simple: EquityData;
   realistic: EquityData & { metrics: RealisticMetrics };
 }
+
+// Walk-Forward Validation types
+export interface WFAggregateMetric {
+  mean: number;
+  std: number;
+  ci_lower: number;
+  ci_upper: number;
+}
+
+export interface WFWindow {
+  window_index: number;
+  train_start: number;
+  train_end: number;
+  test_start: number;
+  test_end: number;
+  num_train_bars: number;
+  num_test_bars: number;
+  oos_accuracy: number;
+  oos_precision: number;
+  oos_recall: number;
+  sharpe: number;
+  max_dd: number;
+  total_return: number;
+  win_rate: number;
+  num_trades: number;
+  timestamps: number[];
+  equity: number[];
+}
+
+export interface WFRunData {
+  id: number;
+  symbol: string;
+  bar_type: string;
+  labeling_method: string;
+  train_days: number;
+  test_days: number;
+  num_windows: number;
+  windows: WFWindow[];
+  stitched_timestamps: number[];
+  stitched_equity: number[];
+  stitched_drawdown: number[];
+  aggregate: Record<string, WFAggregateMetric>;
+  avg_insample_recall: number;
+  avg_oos_accuracy: number;
+  overfitting_gap: number;
+  created_at: string;
+}
+
+export type ViewMode = "live" | "walk-forward";

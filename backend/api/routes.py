@@ -4,7 +4,10 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from backend.config import BAR_TYPES, LABELING_METHODS, SYMBOLS, TripleBarrierConfig
-from backend.data.database import load_bars, load_signals
+from backend.data.database import (
+    load_bars, load_signals,
+    load_wf_runs, load_wf_run, load_wf_latest,
+)
 from backend.simulation.equity import simulate_equity, SimulationResult
 from backend.simulation.config import SimulationConfig, VIP_FEE_TABLE
 
@@ -277,3 +280,44 @@ async def get_equity(
     out = _result_to_dict(result)
     out["simulation_mode"] = simulation_mode
     return out
+
+
+# ------------------------------------------------------------------
+# Walk-Forward Validation endpoints
+# ------------------------------------------------------------------
+
+@router.get("/wf-runs")
+async def get_wf_runs(
+    request: Request,
+    symbol: str | None = Query(default=None),
+    bar_type: str | None = Query(default=None),
+    labeling: str | None = Query(default=None),
+):
+    """List walk-forward run summaries, optionally filtered."""
+    conn = request.app.state.db
+    return load_wf_runs(conn, symbol, bar_type, labeling)
+
+
+@router.get("/wf-run/{run_id}")
+async def get_wf_run(request: Request, run_id: int):
+    """Load a full walk-forward run including windows and equity curves."""
+    conn = request.app.state.db
+    result = load_wf_run(conn, run_id)
+    if result is None:
+        raise HTTPException(404, "Walk-forward run not found")
+    return result
+
+
+@router.get("/wf-latest/{symbol}")
+async def get_wf_latest(
+    request: Request,
+    symbol: str,
+    bar_type: str = Query(...),
+    labeling: str = Query(...),
+):
+    """Load the most recent walk-forward run for a given symbol/bar/labeling combo."""
+    conn = request.app.state.db
+    result = load_wf_latest(conn, symbol, bar_type, labeling)
+    if result is None:
+        raise HTTPException(404, "No walk-forward results for this combination")
+    return result

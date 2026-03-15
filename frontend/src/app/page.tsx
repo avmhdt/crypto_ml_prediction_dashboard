@@ -7,8 +7,9 @@ import { Chart } from "@/components/Chart";
 import { SignalsTable } from "@/components/SignalsTable";
 import { MetricsPanel } from "@/components/MetricsPanel";
 import { EquityCurve } from "@/components/EquityCurve";
+import { WalkForwardPanel } from "@/components/WalkForwardPanel";
 import { useWebSocket } from "@/hooks/useWebSocket";
-import type { BarData, Signal, Metrics, DashboardConfig, WSMessage, SimulationConfig } from "@/lib/types";
+import type { BarData, Signal, Metrics, DashboardConfig, WSMessage, SimulationConfig, ViewMode } from "@/lib/types";
 
 const DEFAULT_SIMULATION: SimulationConfig = {
   mode: "simple",
@@ -39,6 +40,7 @@ export default function DashboardPage() {
   const [signals, setSignals] = useState<Signal[]>([]);
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [simulationConfig, setSimulationConfig] = useState<SimulationConfig>(DEFAULT_SIMULATION);
+  const [viewMode, setViewMode] = useState<ViewMode>("live");
 
   // Fetch config on mount
   useEffect(() => {
@@ -108,7 +110,7 @@ export default function DashboardPage() {
 
   return (
     <div className="flex min-h-screen flex-col bg-[var(--background)] text-[var(--foreground)]">
-      <Header connected={connected} symbol={symbol} />
+      <Header connected={connected} symbol={symbol} viewMode={viewMode} onViewModeChange={setViewMode} />
       <Controls
         symbols={config.symbols}
         barTypes={config.bar_types}
@@ -121,23 +123,29 @@ export default function DashboardPage() {
         onLabelingChange={setLabeling}
       />
       <main className="flex-1 space-y-4 p-4 lg:p-6">
-        {/* Metrics row */}
-        <MetricsPanel metrics={metrics} />
+        {viewMode === "live" ? (
+          <>
+            {/* Metrics row */}
+            <MetricsPanel metrics={metrics} />
 
-        {/* Chart */}
-        <Chart bars={bars} signals={signals} labeling={labeling} />
+            {/* Chart */}
+            <Chart bars={bars} signals={signals} labeling={labeling} />
 
-        {/* Equity curve simulation */}
-        <EquityCurve
-          symbol={symbol}
-          barType={barType}
-          labeling={labeling}
-          simulationConfig={simulationConfig}
-          onSimulationConfigChange={setSimulationConfig}
-        />
+            {/* Equity curve simulation */}
+            <EquityCurve
+              symbol={symbol}
+              barType={barType}
+              labeling={labeling}
+              simulationConfig={simulationConfig}
+              onSimulationConfigChange={setSimulationConfig}
+            />
 
-        {/* Signals table */}
-        <SignalsTable signals={signals} labeling={labeling} />
+            {/* Signals table */}
+            <SignalsTable signals={signals} labeling={labeling} />
+          </>
+        ) : (
+          <WalkForwardPanel symbol={symbol} barType={barType} labeling={labeling} />
+        )}
 
         {/* Footer bar */}
         <div className="flex items-center justify-between rounded-lg border border-[var(--border)] bg-[var(--surface)] px-4 py-2 text-[10px] text-zinc-600">
