@@ -122,6 +122,7 @@ export default function DashboardPage() {
         onSymbolChange={setSymbol}
         onBarTypeChange={setBarType}
         onLabelingChange={setLabeling}
+        viewMode={viewMode}
       />
       <main className="flex-1 space-y-4 p-4 lg:p-6">
         {viewMode === "live" ? (

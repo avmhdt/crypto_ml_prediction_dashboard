@@ -1,5 +1,7 @@
 "use client";
 
+import type { ViewMode } from "@/lib/types";
+
 interface ControlsProps {
   symbols: string[];
   barTypes: string[];
@@ -10,6 +12,7 @@ interface ControlsProps {
   onSymbolChange: (symbol: string) => void;
   onBarTypeChange: (barType: string) => void;
   onLabelingChange: (labeling: string) => void;
+  viewMode?: ViewMode;
 }
 
 const DISPLAY_NAMES: Record<string, string> = {
@@ -79,21 +82,47 @@ export function Controls({
   onSymbolChange,
   onBarTypeChange,
   onLabelingChange,
+  viewMode = "live",
 }: ControlsProps) {
+  // Synthetic mode: no symbols (data is generated, not from an exchange)
+  // Walk-forward mode: only BTCUSDT (only symbol with historical tick data)
+  const showSymbols = viewMode === "live";
+  const filteredSymbols = viewMode === "walk-forward" ? ["BTCUSDT"] : symbols;
+
   return (
     <div className="flex flex-wrap items-start gap-6 border-b border-[var(--border)] bg-[var(--surface)] px-6 py-3">
-      <PillGroup
-        label="Symbol"
-        items={symbols}
-        selected={selectedSymbol}
-        onChange={onSymbolChange}
-        colorFn={(_, isSelected) =>
-          isSelected
-            ? "border-yellow-500/40 bg-yellow-500/10 text-yellow-400"
-            : "border-transparent bg-zinc-800/40 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-300"
-        }
-      />
-      <div className="hidden h-10 w-px self-center bg-zinc-800 sm:block" />
+      {showSymbols && (
+        <>
+          <PillGroup
+            label="Symbol"
+            items={filteredSymbols}
+            selected={selectedSymbol}
+            onChange={onSymbolChange}
+            colorFn={(_, isSelected) =>
+              isSelected
+                ? "border-yellow-500/40 bg-yellow-500/10 text-yellow-400"
+                : "border-transparent bg-zinc-800/40 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-300"
+            }
+          />
+          <div className="hidden h-10 w-px self-center bg-zinc-800 sm:block" />
+        </>
+      )}
+      {viewMode === "walk-forward" && (
+        <>
+          <PillGroup
+            label="Symbol"
+            items={filteredSymbols}
+            selected={selectedSymbol}
+            onChange={onSymbolChange}
+            colorFn={(_, isSelected) =>
+              isSelected
+                ? "border-yellow-500/40 bg-yellow-500/10 text-yellow-400"
+                : "border-transparent bg-zinc-800/40 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-300"
+            }
+          />
+          <div className="hidden h-10 w-px self-center bg-zinc-800 sm:block" />
+        </>
+      )}
       <PillGroup
         label="Bar Type"
         items={barTypes}
