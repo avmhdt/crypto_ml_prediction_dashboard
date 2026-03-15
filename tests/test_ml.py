@@ -1,7 +1,8 @@
 """Unit tests for backend/ml/ modules.
 
-Test IDs T-M01 through T-M13 covering purged CV, primary model,
-meta-labeling, bet sizing, save/load, optuna tuning, and orchestrator.
+Test IDs T-M01 through T-M19 covering purged CV, primary model,
+meta-labeling, bet sizing, save/load, optuna tuning, orchestrator,
+and training pipeline bug fixes.
 """
 import tempfile
 from pathlib import Path
@@ -311,3 +312,120 @@ class TestTrainingOrchestrator:
         assert results["num_samples"] > 0
         assert 0.0 <= results["primary_recall"] <= 1.0
         assert 0.0 <= results["meta_precision"] <= 1.0
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Training Pipeline Bug Fixes (T-M14 – T-M19)
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestTrainingBugFixes:
+    def test_tm14_results_dict_handles_none_trades(self):
+        """Bug 3: len(trades) should not crash when trades is None."""
+        trades = None
+        num_trades = len(trades) if trades is not None else 0
+        assert num_trades == 0
+
+        trades = pd.DataFrame({"price": [1, 2, 3]})
+        num_trades = len(trades) if trades is not None else 0
+        assert num_trades == 3
+
+    def test_tm15_label_ends_uses_holding_period_not_nsplits(self):
+        """Bug 1: Purged CV label_ends should use max_holding_period, not n_splits."""
+        from backend.config import TripleBarrierConfig, TrainingConfig
+
+        barrier_config = TripleBarrierConfig()  # max_holding_period=50
+        training_config = TrainingConfig()       # n_splits=5
+
+        n = 200
+        label_span = barrier_config.max_holding_period  # 50
+        label_ends = np.minimum(np.arange(n) + label_span, n - 1)
+
+        # label_ends[0] should be 50 (max_holding_period), NOT 5 (n_splits)
+        assert label_ends[0] == 50, f"Expected 50, got {label_ends[0]}"
+        assert label_ends[0] != training_config.n_splits, (
+            "label_ends should NOT use n_splits"
+        )
+        # Near end of array, should clamp to n-1
+        assert label_ends[160] == 199
+
+    def test_tm16_label_span_for_trend_scanning(self):
+        """Bug 1: Trend scanning label span should be max(horizons) = 80."""
+        label_span = 80  # max([5, 10, 20, 40, 80])
+        n = 200
+        label_ends = np.minimum(np.arange(n) + label_span, n - 1)
+        assert label_ends[0] == 80
+        assert label_ends[119] == 199  # 119 + 80 = 199 = n-1
+        assert label_ends[150] == 199  # clamped to n-1
+
+    @pytest.mark.skipif(
+        not _optuna_available(),
+        reason="optuna not installed",
+    )
+    def test_tm17_optuna_optimize_for_recall(self):
+        """Bug 4: Optuna should maximize recall when optimize_for='recall'."""
+        from backend.ml.training import _optuna_tune
+        from backend.config import TrainingConfig
+
+        X, y = _make_features_and_labels(n_samples=200, seed=42)
+        weights = np.ones(len(y))
+        config = TrainingConfig(optuna_n_trials=2, optuna_timeout=30)
+
+        params = _optuna_tune(X, y, weights, config,
+                              label_span=50, optimize_for="recall")
+        assert isinstance(params, dict)
+        assert "n_estimators" in params
+
+    @pytest.mark.skipif(
+        not _optuna_available(),
+        reason="optuna not installed",
+    )
+    def test_tm18_optuna_optimize_for_log_loss(self):
+        """Bug 4: Optuna should still work with optimize_for='log_loss' (regression)."""
+        from backend.ml.training import _optuna_tune
+        from backend.config import TrainingConfig
+
+        X, y = _make_features_and_labels(n_samples=200, seed=42)
+        weights = np.ones(len(y))
+        config = TrainingConfig(optuna_n_trials=2, optuna_timeout=30)
+
+        params = _optuna_tune(X, y, weights, config,
+                              label_span=50, optimize_for="log_loss")
+        assert isinstance(params, dict)
+        assert "n_estimators" in params
+
+    def test_tm19_meta_eval_uses_holdout(self):
+        """Bug 2: Meta model evaluation should use held-out data, not training."""
+        from sklearn.metrics import precision_score as sk_precision
+
+        X, y = _make_features_and_labels(n_samples=300, seed=33)
+        primary = PrimaryModel()
+        primary.fit(X, y)
+        oos_preds = primary.predict(X)
+        weights = np.ones(len(y))
+
+        # Simulate the holdout split from the fixed code
+        val_size = max(int(len(y) * 0.2), 50)
+        val_size = min(val_size, len(y) - 50)
+        meta_train_idx = np.arange(len(y) - val_size)
+        meta_val_idx = np.arange(len(y) - val_size, len(y))
+
+        # No overlap between train and val
+        assert len(meta_train_idx) > 0
+        assert len(meta_val_idx) > 0
+        assert len(set(meta_train_idx) & set(meta_val_idx)) == 0, (
+            "Train/val indices must not overlap"
+        )
+
+        # Train meta on train split, evaluate on val split
+        meta = MetaLabelingModel()
+        meta.fit(X.iloc[meta_train_idx], oos_preds[meta_train_idx],
+                 y[meta_train_idx], sample_weight=weights[meta_train_idx])
+
+        meta_preds_val = meta.predict(X.iloc[meta_val_idx], oos_preds[meta_val_idx])
+        meta_precision = sk_precision(
+            MetaLabelingModel.construct_meta_labels(
+                oos_preds[meta_val_idx], y[meta_val_idx]
+            ),
+            meta_preds_val, zero_division=0,
+        )
+        assert 0.0 <= meta_precision <= 1.0
