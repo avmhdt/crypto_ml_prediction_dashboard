@@ -68,11 +68,11 @@ function WFOverfittingGap({ data }: { data: WFRunData }) {
               {(data.avg_oos_accuracy * 100).toFixed(1)}%
             </span>
           </div>
-          {data.aggregate.sharpe && (
+          {data.aggregate?.["sharpe"] && (
             <div className="flex justify-between">
               <span className="text-xs text-zinc-400">Avg Sharpe</span>
               <span className="num text-sm font-semibold text-white">
-                {data.aggregate.sharpe.mean.toFixed(2)}
+                {data.aggregate["sharpe"].mean.toFixed(2)}
               </span>
             </div>
           )}
