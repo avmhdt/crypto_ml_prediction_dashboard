@@ -207,6 +207,16 @@ def train_pipeline(
     logger.info(f"Label distribution: LONG={n_long} ({100*n_long/len(labels):.1f}%), "
                 f"SHORT={n_short} ({100*n_short/len(labels):.1f}%)")
 
+    # Compute label span for purged CV based on labeling method.
+    # This determines how far forward each label's outcome extends,
+    # which controls the purge radius in PurgedKFoldCV.
+    if labeling_method == "triple_barrier":
+        label_span = barrier_config.max_holding_period
+    elif labeling_method == "trend_scanning":
+        label_span = 80  # max of default horizons [5, 10, 20, 40, 80]
+    else:  # directional_change — event-driven, use conservative estimate
+        label_span = barrier_config.max_holding_period
+
     # Step 4: Compute sample weights
     logger.info("Computing sample weights...")
     # Simple label spans: each label covers max_holding_period bars
@@ -232,6 +242,7 @@ def train_pipeline(
     if training_config.optuna_n_trials > 0:
         best_params = _optuna_tune(
             features, labels, weights, training_config,
+            label_span=label_span,
             optimize_for="recall",
         )
         primary.params.update(best_params)
@@ -251,7 +262,7 @@ def train_pipeline(
     logger.info("Training meta-labeling model (Precision-optimized, OOS)...")
 
     label_ends = np.minimum(
-        np.arange(len(labels)) + training_config.n_splits,
+        np.arange(len(labels)) + label_span,
         len(labels) - 1,
     )
     oos_cv = PurgedKFoldCV(
@@ -273,15 +284,46 @@ def train_pipeline(
                 f"(in-sample recall: {primary_recall:.4f})")
 
     meta_model = MetaLabelingModel()
-    meta_model.fit(features, oos_preds, labels, sample_weight=weights)
 
+    if len(labels) < 100:
+        # Too few samples for meaningful holdout evaluation
+        meta_model.fit(features, oos_preds, labels, sample_weight=weights)
+        meta_preds = meta_model.predict(features, oos_preds)
+        meta_precision = precision_score(
+            MetaLabelingModel.construct_meta_labels(oos_preds, labels),
+            meta_preds, zero_division=0,
+        )
+        logger.warning(f"Too few samples ({len(labels)}) for meta holdout; "
+                       f"meta_precision is in-sample: {meta_precision:.4f}")
+    else:
+        # Temporal holdout: last 20% for honest OOS evaluation
+        val_size = max(int(len(labels) * 0.2), 50)
+        val_size = min(val_size, len(labels) - 50)
+        meta_train_idx = np.arange(len(labels) - val_size)
+        meta_val_idx = np.arange(len(labels) - val_size, len(labels))
+
+        meta_model.fit(
+            features.iloc[meta_train_idx], oos_preds[meta_train_idx],
+            labels[meta_train_idx], sample_weight=weights[meta_train_idx],
+        )
+
+        # Evaluate on held-out validation set
+        meta_preds_val = meta_model.predict(
+            features.iloc[meta_val_idx], oos_preds[meta_val_idx],
+        )
+        meta_precision = precision_score(
+            MetaLabelingModel.construct_meta_labels(
+                oos_preds[meta_val_idx], labels[meta_val_idx]
+            ),
+            meta_preds_val, zero_division=0,
+        )
+        logger.info(f"Meta-labeling precision (held-out): {meta_precision:.4f}")
+
+        # Refit on full data for production model
+        meta_model.fit(features, oos_preds, labels, sample_weight=weights)
+
+    # Generate bet-sizing probabilities from full-data model
     meta_probs = meta_model.predict_proba(features, oos_preds)
-    meta_preds = meta_model.predict(features, oos_preds)
-    meta_precision = precision_score(
-        MetaLabelingModel.construct_meta_labels(oos_preds, labels),
-        meta_preds, zero_division=0,
-    )
-    logger.info(f"Meta-labeling precision (OOS): {meta_precision:.4f}")
 
     # Step 7: Compute bet sizes (raw continuous, no discretization)
     bet_sizes = bet_size_from_probability(meta_probs)
@@ -306,7 +348,7 @@ def train_pipeline(
         "symbol": symbol,
         "bar_type": bar_type,
         "labeling_method": labeling_method,
-        "num_trades": len(trades),
+        "num_trades": len(trades) if trades is not None else 0,
         "num_bars": len(bars),
         "num_samples": len(features),
         "num_features": features.shape[1],
@@ -328,8 +370,22 @@ def train_pipeline(
 
 def _optuna_tune(features: pd.DataFrame, labels: np.ndarray,
                  weights: np.ndarray, config: TrainingConfig,
+                 label_span: int = 50,
                  optimize_for: str = "recall") -> dict:
-    """Hyperparameter tuning with Optuna using Purged CV."""
+    """Hyperparameter tuning with Optuna using Purged CV.
+
+    Parameters
+    ----------
+    label_span : int
+        Forward span of each label in bars (used for purge radius).
+    optimize_for : str
+        Metric to optimize: ``"recall"``, ``"precision"``, or ``"log_loss"``.
+    """
+    # Determine study direction based on metric
+    if optimize_for in ("recall", "precision"):
+        direction = "maximize"
+    else:
+        direction = "minimize"
 
     def objective(trial):
         params = {
@@ -344,7 +400,7 @@ def _optuna_tune(features: pd.DataFrame, labels: np.ndarray,
 
         # Create label end indices for purged CV
         label_ends = np.minimum(
-            np.arange(len(labels)) + config.n_splits,
+            np.arange(len(labels)) + label_span,
             len(labels) - 1,
         )
 
@@ -368,9 +424,20 @@ def _optuna_tune(features: pd.DataFrame, labels: np.ndarray,
                                           "verbose": -1, "n_jobs": -1})
             model.fit(X_train, y_train, sample_weight=w_train)
 
-            y_pred_proba = model.predict_proba(X_test)
-            y_test_binary = ((y_test + 1) / 2).astype(int)
-            score = log_loss(y_test_binary, y_pred_proba, labels=[0, 1])
+            if optimize_for == "recall":
+                y_pred = model.predict(X_test)
+                y_pred_binary = ((y_pred + 1) / 2).astype(int)
+                y_test_binary = ((y_test + 1) / 2).astype(int)
+                score = recall_score(y_test_binary, y_pred_binary, zero_division=0)
+            elif optimize_for == "precision":
+                y_pred = model.predict(X_test)
+                y_pred_binary = ((y_pred + 1) / 2).astype(int)
+                y_test_binary = ((y_test + 1) / 2).astype(int)
+                score = precision_score(y_test_binary, y_pred_binary, zero_division=0)
+            else:
+                y_pred_proba = model.predict_proba(X_test)
+                y_test_binary = ((y_test + 1) / 2).astype(int)
+                score = log_loss(y_test_binary, y_pred_proba, labels=[0, 1])
             scores.append(score)
 
         return np.mean(scores)
@@ -378,7 +445,7 @@ def _optuna_tune(features: pd.DataFrame, labels: np.ndarray,
     sampler = optuna.samplers.TPESampler(seed=42)
     pruner = optuna.pruners.HyperbandPruner()
     study = optuna.create_study(
-        direction="minimize",
+        direction=direction,
         sampler=sampler,
         pruner=pruner,
     )
@@ -389,5 +456,5 @@ def _optuna_tune(features: pd.DataFrame, labels: np.ndarray,
         show_progress_bar=True,
     )
 
-    logger.info(f"Best trial: {study.best_trial.value:.4f}")
+    logger.info(f"Best trial ({optimize_for}): {study.best_trial.value:.4f}")
     return study.best_trial.params
