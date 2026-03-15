@@ -66,7 +66,7 @@ export function Header({ connected, symbol, viewMode, onViewModeChange }: Header
 
         {/* View mode toggle */}
         <div className="flex items-center rounded-lg border border-zinc-700/50 bg-zinc-800/50 p-0.5">
-          {(["live", "walk-forward"] as ViewMode[]).map((mode) => (
+          {(["live", "walk-forward", "synthetic"] as ViewMode[]).map((mode) => (
             <button
               key={mode}
               onClick={() => onViewModeChange(mode)}
@@ -76,7 +76,7 @@ export function Header({ connected, symbol, viewMode, onViewModeChange }: Header
                   : "text-zinc-400 hover:text-zinc-200"
               }`}
             >
-              {mode === "live" ? "Live" : "Walk-Forward"}
+              {mode === "live" ? "Live" : mode === "walk-forward" ? "Walk-Forward" : "Synthetic"}
             </button>
           ))}
         </div>

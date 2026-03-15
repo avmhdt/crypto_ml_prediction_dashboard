@@ -7,6 +7,7 @@ from backend.config import BAR_TYPES, LABELING_METHODS, SYMBOLS, TripleBarrierCo
 from backend.data.database import (
     load_bars, load_signals,
     load_wf_runs, load_wf_run, load_wf_latest,
+    load_synth_runs, load_synth_run, load_synth_latest,
 )
 from backend.simulation.equity import simulate_equity, SimulationResult
 from backend.simulation.config import SimulationConfig, VIP_FEE_TABLE
@@ -320,4 +321,38 @@ async def get_wf_latest(
     result = load_wf_latest(conn, symbol, bar_type, labeling)
     if result is None:
         raise HTTPException(404, "No walk-forward results for this combination")
+    return result
+
+
+# ── Synthetic Signal Validation ───────────────────────────────────
+
+@router.get("/synth-runs")
+async def get_synth_runs(
+    request: Request,
+    bar_type: str | None = None,
+    labeling: str | None = None,
+):
+    conn = request.app.state.db
+    return load_synth_runs(conn, bar_type, labeling)
+
+
+@router.get("/synth-run/{run_id}")
+async def get_synth_run(request: Request, run_id: int):
+    conn = request.app.state.db
+    result = load_synth_run(conn, run_id)
+    if result is None:
+        raise HTTPException(404, "Synthetic validation run not found")
+    return result
+
+
+@router.get("/synth-latest")
+async def get_synth_latest(
+    request: Request,
+    bar_type: str = Query(...),
+    labeling: str = Query(...),
+):
+    conn = request.app.state.db
+    result = load_synth_latest(conn, bar_type, labeling)
+    if result is None:
+        raise HTTPException(404, "No synthetic validation results for this combination")
     return result

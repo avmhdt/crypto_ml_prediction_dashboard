@@ -8,6 +8,7 @@ import { SignalsTable } from "@/components/SignalsTable";
 import { MetricsPanel } from "@/components/MetricsPanel";
 import { EquityCurve } from "@/components/EquityCurve";
 import { WalkForwardPanel } from "@/components/WalkForwardPanel";
+import { SyntheticPanel } from "@/components/SyntheticPanel";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import type { BarData, Signal, Metrics, DashboardConfig, WSMessage, SimulationConfig, ViewMode } from "@/lib/types";
 
@@ -143,8 +144,10 @@ export default function DashboardPage() {
             {/* Signals table */}
             <SignalsTable signals={signals} labeling={labeling} />
           </>
-        ) : (
+        ) : viewMode === "walk-forward" ? (
           <WalkForwardPanel symbol={symbol} barType={barType} labeling={labeling} />
+        ) : (
+          <SyntheticPanel barType={barType} labeling={labeling} />
         )}
 
         {/* Footer bar */}

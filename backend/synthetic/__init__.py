@@ -1,0 +1,1 @@
+"""Synthetic signal validation module."""
