@@ -354,6 +354,13 @@ export function WalkForwardPanel({ symbol, barType, labeling }: WalkForwardPanel
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();
       })
+      .then((raw: any) => {
+        // Normalize: API returns aggregate_stats, frontend expects aggregate
+        if (raw.aggregate_stats && !raw.aggregate) {
+          raw.aggregate = raw.aggregate_stats;
+        }
+        return raw as WFRunData;
+      })
       .then(setData)
       .catch((e) => {
         if (e.name !== "AbortError") {
