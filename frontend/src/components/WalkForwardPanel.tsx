@@ -111,10 +111,16 @@ function WFEquityCurve({ data }: { data: WFRunData }) {
       lineWidth: 2,
     });
 
-    const eqData = data.stitched_timestamps.map((ts, i) => ({
-      time: Math.floor(ts / 1000) as any,
-      value: data.stitched_equity[i],
-    }));
+    // Deduplicate and ensure strictly ascending times (lightweight-charts requirement)
+    const seen = new Set<number>();
+    const eqData: { time: any; value: number }[] = [];
+    for (let i = 0; i < data.stitched_timestamps.length; i++) {
+      const sec = Math.floor(data.stitched_timestamps[i] / 1000);
+      if (sec > 0 && !seen.has(sec)) {
+        seen.add(sec);
+        eqData.push({ time: sec as any, value: data.stitched_equity[i] });
+      }
+    }
     eqSeries.setData(eqData);
     chart.timeScale().fitContent();
 
@@ -139,10 +145,15 @@ function WFEquityCurve({ data }: { data: WFRunData }) {
         lineWidth: 1,
       });
 
-      const ddData = data.stitched_timestamps.map((ts, i) => ({
-        time: Math.floor(ts / 1000) as any,
-        value: data.stitched_drawdown[i] * 100,
-      }));
+      const ddSeen = new Set<number>();
+      const ddData: { time: any; value: number }[] = [];
+      for (let i = 0; i < data.stitched_timestamps.length; i++) {
+        const sec = Math.floor(data.stitched_timestamps[i] / 1000);
+        if (sec > 0 && !ddSeen.has(sec)) {
+          ddSeen.add(sec);
+          ddData.push({ time: sec as any, value: data.stitched_drawdown[i] * 100 });
+        }
+      }
       ddSeries.setData(ddData);
       ddChart.timeScale().fitContent();
 

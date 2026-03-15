@@ -72,7 +72,7 @@ def _generate_synthetic_windows(
         test_end_ms = int(test_end.timestamp() * 1000)
 
         # Generate timestamps spread across test period
-        timestamps = np.linspace(test_start_ms, test_end_ms, points_per_window, dtype=int).tolist()
+        timestamps = np.linspace(test_start_ms, test_end_ms, points_per_window, dtype=np.int64).tolist()
 
         # Slightly negative drift (honest — crypto is hard to predict)
         daily_return = rng.uniform(-0.002, 0.001)
