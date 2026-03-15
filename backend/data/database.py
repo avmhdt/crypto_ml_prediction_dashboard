@@ -187,6 +187,42 @@ def init_schema(conn: duckdb.DuckDBPyConnection) -> None:
         )
     """)
 
+    # ------------------------------------------------------------------
+    # Synthetic Signal Validation tables
+    # ------------------------------------------------------------------
+    conn.execute("CREATE SEQUENCE IF NOT EXISTS synth_run_id_seq START 1")
+    conn.execute("CREATE SEQUENCE IF NOT EXISTS synth_point_id_seq START 1")
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS synth_runs (
+            id INTEGER PRIMARY KEY DEFAULT(nextval('synth_run_id_seq')),
+            bar_type VARCHAR NOT NULL,
+            labeling_method VARCHAR NOT NULL,
+            n_ticks INTEGER NOT NULL,
+            sharpe_levels VARCHAR,
+            detection_threshold DOUBLE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS synth_points (
+            id INTEGER PRIMARY KEY DEFAULT(nextval('synth_point_id_seq')),
+            run_id INTEGER NOT NULL,
+            sharpe DOUBLE NOT NULL,
+            oos_accuracy DOUBLE,
+            oos_precision DOUBLE,
+            oos_recall DOUBLE,
+            equity_sharpe DOUBLE,
+            total_return DOUBLE,
+            max_dd DOUBLE,
+            win_rate DOUBLE,
+            num_trades INTEGER,
+            num_bars INTEGER,
+            num_samples INTEGER
+        )
+    """)
+
 
 def prune_old_data(conn: duckdb.DuckDBPyConnection, now_ms: int) -> None:
     """Remove data older than retention windows."""
@@ -565,3 +601,116 @@ def load_wf_latest(
         return None
 
     return load_wf_run(conn, row[0])
+
+
+# ------------------------------------------------------------------
+# Synthetic Validation CRUD
+# ------------------------------------------------------------------
+
+def save_synth_result(conn: duckdb.DuckDBPyConnection,
+                      result: "SyntheticValidationResult") -> int:
+    """Insert a synthetic validation run and its points into the database."""
+    conn.execute(
+        """INSERT INTO synth_runs (
+            bar_type, labeling_method, n_ticks,
+            sharpe_levels, detection_threshold, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?)""",
+        [
+            result.bar_type,
+            result.labeling_method,
+            result.n_ticks,
+            json.dumps(result.sharpe_levels),
+            result.detection_threshold,
+            result.created_at,
+        ],
+    )
+    run_id = conn.execute("SELECT currval('synth_run_id_seq')").fetchone()[0]
+
+    for pt in result.points:
+        conn.execute(
+            """INSERT INTO synth_points (
+                run_id, sharpe, oos_accuracy, oos_precision, oos_recall,
+                equity_sharpe, total_return, max_dd, win_rate,
+                num_trades, num_bars, num_samples
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            [
+                run_id, pt.sharpe, pt.oos_accuracy, pt.oos_precision, pt.oos_recall,
+                pt.equity_sharpe, pt.total_return, pt.max_dd, pt.win_rate,
+                pt.num_trades, pt.num_bars, pt.num_samples,
+            ],
+        )
+
+    return int(run_id)
+
+
+def load_synth_runs(conn: duckdb.DuckDBPyConnection,
+                    bar_type: str | None = None,
+                    labeling_method: str | None = None) -> list[dict]:
+    """Load synthetic validation run summaries."""
+    query = "SELECT * FROM synth_runs WHERE 1=1"
+    params: list = []
+    if bar_type:
+        query += " AND bar_type = ?"
+        params.append(bar_type)
+    if labeling_method:
+        query += " AND labeling_method = ?"
+        params.append(labeling_method)
+    query += " ORDER BY id DESC"
+
+    rows = conn.execute(query, params).fetchall()
+    cols = [c[0] for c in conn.execute(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_name = 'synth_runs' ORDER BY ordinal_position"
+    ).fetchall()]
+
+    results = []
+    for row in rows:
+        d = dict(zip(cols, row))
+        val = d.get("sharpe_levels")
+        if isinstance(val, str):
+            d["sharpe_levels"] = json.loads(val)
+        results.append(d)
+    return results
+
+
+def load_synth_run(conn: duckdb.DuckDBPyConnection, run_id: int) -> dict | None:
+    """Load a full synthetic validation run including points."""
+    row = conn.execute("SELECT * FROM synth_runs WHERE id = ?", [run_id]).fetchone()
+    if row is None:
+        return None
+
+    cols = [c[0] for c in conn.execute(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_name = 'synth_runs' ORDER BY ordinal_position"
+    ).fetchall()]
+    run_dict = dict(zip(cols, row))
+
+    val = run_dict.get("sharpe_levels")
+    if isinstance(val, str):
+        run_dict["sharpe_levels"] = json.loads(val)
+
+    # Load points
+    pt_rows = conn.execute(
+        "SELECT * FROM synth_points WHERE run_id = ? ORDER BY sharpe",
+        [run_id],
+    ).fetchall()
+    pt_cols = [c[0] for c in conn.execute(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_name = 'synth_points' ORDER BY ordinal_position"
+    ).fetchall()]
+
+    run_dict["points"] = [dict(zip(pt_cols, r)) for r in pt_rows]
+    return run_dict
+
+
+def load_synth_latest(conn: duckdb.DuckDBPyConnection,
+                      bar_type: str, labeling_method: str) -> dict | None:
+    """Load most recent synthetic validation run for given combo."""
+    row = conn.execute(
+        "SELECT id FROM synth_runs WHERE bar_type = ? AND labeling_method = ? "
+        "ORDER BY id DESC LIMIT 1",
+        [bar_type, labeling_method],
+    ).fetchone()
+    if row is None:
+        return None
+    return load_synth_run(conn, row[0])

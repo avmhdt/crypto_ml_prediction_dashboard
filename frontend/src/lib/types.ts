@@ -162,4 +162,27 @@ export interface WFRunData {
   created_at: string;
 }
 
-export type ViewMode = "live" | "walk-forward";
+export type ViewMode = "live" | "walk-forward" | "synthetic";
+
+// Synthetic Signal Validation types
+export interface SynthPoint {
+  sharpe: number;
+  oos_accuracy: number;
+  oos_precision: number;
+  oos_recall: number;
+  equity_sharpe: number;
+  total_return: number;
+  max_dd: number;
+  win_rate: number;
+  num_trades: number;
+}
+
+export interface SynthRunData {
+  id: number;
+  bar_type: string;
+  labeling_method: string;
+  sharpe_levels: number[];
+  points: SynthPoint[];
+  detection_threshold: number;
+  created_at: string;
+}
