@@ -306,7 +306,7 @@ async def get_wf_run(request: Request, run_id: int):
     result = load_wf_run(conn, run_id)
     if result is None:
         raise HTTPException(404, "Walk-forward run not found")
-    return result
+    return _trim_wf_response(result)
 
 
 @router.get("/wf-latest/{symbol}")
@@ -321,6 +321,27 @@ async def get_wf_latest(
     result = load_wf_latest(conn, symbol, bar_type, labeling)
     if result is None:
         raise HTTPException(404, "No walk-forward results for this combination")
+    return _trim_wf_response(result)
+
+
+def _downsample(arr: list, max_points: int = 2000) -> list:
+    """Downsample a list to max_points by taking evenly spaced indices."""
+    if not arr or len(arr) <= max_points:
+        return arr
+    step = len(arr) / max_points
+    return [arr[int(i * step)] for i in range(max_points)]
+
+
+def _trim_wf_response(result: dict, max_stitched: int = 2000,
+                       max_per_window: int = 500) -> dict:
+    """Downsample equity curves in a WF response to limit payload size."""
+    for field in ("stitched_timestamps", "stitched_equity", "stitched_drawdown"):
+        if field in result and isinstance(result[field], list):
+            result[field] = _downsample(result[field], max_stitched)
+    for w in result.get("windows", []):
+        for field in ("timestamps", "equity", "drawdown"):
+            if field in w and isinstance(w[field], list):
+                w[field] = _downsample(w[field], max_per_window)
     return result
 
 
