@@ -140,11 +140,19 @@ def _evaluate_single_sharpe(
     # 4. Compute features
     features = compute_all_features(bars, window=training_config.feature_window)
     features = features.ffill()
+
+    # Drop features that are mostly NaN (e.g. FFD with long warmup on short series)
+    nan_frac = features.isna().mean()
+    sparse_cols = nan_frac[nan_frac > 0.5].index.tolist()
+    if sparse_cols:
+        logger.debug(f"  Dropping {len(sparse_cols)} sparse features: {sparse_cols}")
+        features = features.drop(columns=sparse_cols)
+
     valid_mask = features.notna().all(axis=1)
     features = features[valid_mask]
     bars = bars.loc[features.index]
 
-    if len(features) < 50:
+    if len(features) < 30:
         raise ValueError(f"Too few samples ({len(features)}) for sharpe={sharpe}")
 
     labels = bars["label"].values.astype(int)
@@ -158,7 +166,7 @@ def _evaluate_single_sharpe(
     train_bars = bars.iloc[:split_idx]
     test_bars = bars.iloc[split_idx:]
 
-    if len(train_features) < 30 or len(test_features) < 10:
+    if len(train_features) < 15 or len(test_features) < 5:
         raise ValueError(f"Too few train/test samples for sharpe={sharpe}")
 
     # 6. Sample weights
@@ -192,13 +200,19 @@ def _evaluate_single_sharpe(
         np.arange(len(train_labels)) + label_span,
         len(train_labels) - 1,
     )
+
+    # Reduce CV splits for small sample sets to avoid empty folds
+    n_cv_splits = min(training_config.n_splits, max(2, len(train_labels) // 50))
+
     oos_cv = PurgedKFoldCV(
-        n_splits=training_config.n_splits,
+        n_splits=n_cv_splits,
         label_ends=label_ends,
         embargo_pct=training_config.embargo_pct,
     )
     oos_preds = np.zeros(len(train_labels), dtype=int)
     for train_idx, test_idx in oos_cv.split(train_features):
+        if len(train_idx) < 10:
+            continue  # skip fold if purging left too few training samples
         fold_model = PrimaryModel(params={**primary.params})
         fold_model.fit(
             train_features.iloc[train_idx], train_labels[train_idx],
@@ -249,7 +263,7 @@ def _evaluate_single_sharpe(
                 signals_df, test_bars.reset_index(drop=True),
                 labeling_method, starting_capital, fees_bps,
             )
-            metrics = sim_result.get("metrics", {})
+            metrics = sim_result.metrics if hasattr(sim_result, "metrics") else {}
             eq_sharpe = float(metrics.get("sharpe", 0.0))
             total_return = float(metrics.get("total_return", 0.0))
             max_dd = float(metrics.get("max_dd", 0.0))
